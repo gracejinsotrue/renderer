@@ -65,7 +65,19 @@ Vec3f barycentric(Vec2f A, Vec2f B, Vec2f C, Vec2f P)
 // this the hard part
 void triangle(Vec4f *pts, IShader &shader, TGAImage &image, TGAImage &zbuffer)
 {
-    // find the bounding box in screen spce
+    // DEBUG: Count how many triangles are being processed
+    static int triangle_count = 0;
+    triangle_count++;
+
+    if (triangle_count % 1000 == 0)
+    {
+        std::cout << "Processing triangle " << triangle_count << std::endl;
+        std::cout << "  Vertex 0: (" << pts[0][0] / pts[0][3] << ", " << pts[0][1] / pts[0][3] << ", " << pts[0][2] / pts[0][3] << ")" << std::endl;
+        std::cout << "  Vertex 1: (" << pts[1][0] / pts[1][3] << ", " << pts[1][1] / pts[1][3] << ", " << pts[1][2] / pts[1][3] << ")" << std::endl;
+        std::cout << "  Vertex 2: (" << pts[2][0] / pts[2][3] << ", " << pts[2][1] / pts[2][3] << ", " << pts[2][2] / pts[2][3] << ")" << std::endl;
+    }
+
+    // find the bounding box in screen space
     Vec2f bboxmin(std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
     Vec2f bboxmax(-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max());
     for (int i = 0; i < 3; i++)
@@ -76,6 +88,12 @@ void triangle(Vec4f *pts, IShader &shader, TGAImage &image, TGAImage &zbuffer)
             bboxmin[j] = std::min(bboxmin[j], pts[i][j] / pts[i][3]);
             bboxmax[j] = std::max(bboxmax[j], pts[i][j] / pts[i][3]);
         }
+    }
+
+    // DEBUG: Check if bounding box is valid
+    if (triangle_count % 1000 == 0)
+    {
+        std::cout << "  Bounding box: (" << bboxmin.x << ", " << bboxmin.y << ") to (" << bboxmax.x << ", " << bboxmax.y << ")" << std::endl;
     }
     // rastrize by testing each pixel in bounding box
     Vec2i P;

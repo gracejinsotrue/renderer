@@ -30,5 +30,19 @@ public:
     TGAColor diffuse(Vec2f uv);
     float specular(Vec2f uv);
     std::vector<int> face(int idx);
+
+    void setVertex(int i, const Vec3f &newPos);
+    Vec3f *getVertexData();
+    const std::vector<Vec3f> &getVertices() const { return verts_; }
+    void updateVertex(int index, const Vec3f &offset);
+    void resetVertices(); // Reset to original positions
+
+    // Backup/restore for animation
+    void backupOriginalVertices();
+    void restoreOriginalVertices();
+
+private:
+    std::vector<Vec3f> originalVerts_; // Backup of original vertices
+    bool hasBackup_;
 };
 #endif //__MODEL_H__
