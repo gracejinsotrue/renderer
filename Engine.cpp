@@ -3,221 +3,21 @@
 #include <sstream>
 #include <iomanip>
 #include <cmath>
+#include <algorithm>
 
-// Transform implementation
-Matrix Transform::getMatrix() const
-{
-    Matrix translation = Matrix::identity();
-    translation[0][3] = position.x;
-    translation[1][3] = position.y;
-    translation[2][3] = position.z;
-
-    // Simple rotation matrices (Y-axis rotation most common)
-    Matrix rotY = Matrix::identity();
-    float cosY = cos(rotation.y), sinY = sin(rotation.y);
-    rotY[0][0] = cosY;
-    rotY[0][2] = sinY;
-    rotY[2][0] = -sinY;
-    rotY[2][2] = cosY;
-
-    Matrix rotX = Matrix::identity();
-    float cosX = cos(rotation.x), sinX = sin(rotation.x);
-    rotX[1][1] = cosX;
-    rotX[1][2] = -sinX;
-    rotX[2][1] = sinX;
-    rotX[2][2] = cosX;
-
-    Matrix scaling = Matrix::identity();
-    scaling[0][0] = scale.x;
-    scaling[1][1] = scale.y;
-    scaling[2][2] = scale.z;
-
-    return translation * rotY * rotX * scaling;
-}
-
-void Transform::interpolate(const Transform &other, float t, Transform &result) const
-{
-    result.position = position + (other.position - position) * t;
-    result.rotation = rotation + (other.rotation - rotation) * t;
-    result.scale = scale + (other.scale - scale) * t;
-}
-
-// AnimatedModel implementation
-void AnimatedModel::startAnimation(AnimationType type, float duration, bool loop)
-{
-    currentAnimation = type;
-    animation.duration = duration;
-    animation.loop = loop;
-    animation.play();
-    baseTransform = transform;
-
-    std::cout << "Started animation type " << type << " for " << duration << "s" << std::endl;
-}
-
-void AnimatedModel::update(float deltaTime)
-{
-    animation.update(deltaTime);
-
-    if (!animation.playing && !animation.loop)
-        return;
-
-    float t = animation.getProgress();
-    float time = animation.getTime();
-
-    // Reset to base transform
-    transform = baseTransform;
-
-    switch (currentAnimation)
-    {
-    case ROTATE_Y:
-        transform.rotation.y = baseTransform.rotation.y + t * 2.0f * M_PI;
-        break;
-
-    case BOUNCE:
-        transform.position.y = baseTransform.position.y + abs(sin(t * M_PI * 4)) * 0.5f;
-        break;
-
-    case SCALE_PULSE:
-    {
-        float pulseScale = 1.0f + sin(t * M_PI * 4) * 0.3f;
-        transform.scale = Vec3f(pulseScale, pulseScale, pulseScale);
-    }
-    break;
-
-    case FIGURE_8:
-        transform.position.x = baseTransform.position.x + sin(t * 2.0f * M_PI) * 0.8f;
-        transform.position.y = baseTransform.position.y + sin(t * 4.0f * M_PI) * 0.4f;
-        break;
-
-    case HEAD_NOD:
-        transform.rotation.x = baseTransform.rotation.x + sin(t * M_PI * 3) * 0.3f;
-        break;
-
-    case HEAD_SHAKE:
-        transform.rotation.y = baseTransform.rotation.y + sin(t * M_PI * 4) * 0.4f;
-        break;
-    }
-}
-
-void Camera::rotate(float yaw, float pitch)
-{
-    // Convert to spherical coordinates for smooth rotation
-    Vec3f direction = target - position;
-    float radius = direction.norm();
-
-    // Apply rotation
-    float cosYaw = cos(yaw), sinYaw = sin(yaw);
-    float cosPitch = cos(pitch), sinPitch = sin(pitch);
-
-    direction.x = radius * sinPitch * cosYaw;
-    direction.y = radius * cosPitch;
-    direction.z = radius * sinPitch * sinYaw;
-
-    target = position + direction;
-}
-
-void Camera::move(Vec3f direction, float speed)
-{
-    Vec3f forward = (target - position).normalize();
-    Vec3f right = cross(forward, up).normalize();
-    Vec3f realUp = cross(right, forward).normalize();
-
-    Vec3f movement = right * direction.x + realUp * direction.y + forward * direction.z;
-    position = position + movement * speed;
-    target = target + movement * speed;
-}
-
-void Camera::lookAt(Vec3f eye, Vec3f center, Vec3f up_vec)
-{
-    position = eye;
-    target = center;
-    up = up_vec;
-}
-
-// Scene implementation
-Scene::~Scene()
-{
-    clear();
-    clearBackground();
-}
-
-void Scene::addModel(const std::string &filename)
-{
-    Model *model = new Model(filename.c_str());
-    if (model->nverts() > 0)
-    {
-        AnimatedModel *animModel = new AnimatedModel(model);
-        animatedModels.push_back(animModel);
-        std::cout << "Loaded animated model: " << filename << std::endl;
-    }
-    else
-    {
-        delete model;
-        std::cerr << "Failed to load model: " << filename << std::endl;
-    }
-}
-
-void Scene::removeModel(int index)
-{
-    if (index >= 0 && index < animatedModels.size())
-    {
-        delete animatedModels[index]->model;
-        delete animatedModels[index];
-        animatedModels.erase(animatedModels.begin() + index);
-    }
-}
-
-void Scene::clear()
-{
-    for (AnimatedModel *animModel : animatedModels)
-    {
-        delete animModel->model;
-        delete animModel;
-    }
-    animatedModels.clear();
-}
-
-void Scene::update(float deltaTime)
-{
-    for (AnimatedModel *animModel : animatedModels)
-    {
-        animModel->update(deltaTime);
-    }
-}
-
-void Scene::loadBackground(const std::string &filename)
-{
-    clearBackground();
-    background = new TGAImage();
-    if (background->read_tga_file(filename.c_str()))
-    {
-        std::cout << "Loaded background: " << filename << std::endl;
-    }
-    else
-    {
-        delete background;
-        background = nullptr;
-        std::cerr << "Failed to load background: " << filename << std::endl;
-    }
-}
-
-void Scene::clearBackground()
-{
-    if (background)
-    {
-        delete background;
-        background = nullptr;
-    }
-}
-
-// Engine implementation
 Engine::Engine(int winWidth, int winHeight, int renWidth, int renHeight)
-    : window(nullptr), sdlRenderer(nullptr), frameTexture(nullptr), framebuffer(renWidth, renHeight, TGAImage::RGB), zbuffer(renWidth, renHeight, TGAImage::GRAYSCALE), running(false), wireframe(false), showStats(true), windowWidth(winWidth), windowHeight(winHeight), renderWidth(renWidth), renderHeight(renHeight), mouseX(0), mouseY(0), mouseDeltaX(0), mouseDeltaY(0), mousePressed(false), cameraDistance(5.0f), cameraRotationX(0.0f), cameraRotationY(0.0f), cameraTarget(0, 0, 0), orbitMode(true)
+    : window(nullptr), sdlRenderer(nullptr), frameTexture(nullptr),
+      framebuffer(renWidth, renHeight, TGAImage::RGB), zbuffer(renWidth, renHeight, TGAImage::GRAYSCALE),
+      running(false), wireframe(false), showStats(true),
+      windowWidth(winWidth), windowHeight(winHeight), renderWidth(renWidth), renderHeight(renHeight),
+      mouseX(0), mouseY(0), mouseDeltaX(0), mouseDeltaY(0), mousePressed(false),
+      cameraDistance(5.0f), cameraRotationX(0.0f), cameraRotationY(0.0f),
+      cameraTarget(0, 0, 0), orbitMode(true)
 {
-    // Initialize input state
+    // init imput state
     memset(keys, 0, sizeof(keys));
 
-    // Initialize shadow buffer
+    // shadowbuffer
     shadowbuffer.resize(renderWidth * renderHeight);
     std::fill(shadowbuffer.begin(), shadowbuffer.end(), std::numeric_limits<float>::max());
 }
@@ -229,26 +29,26 @@ Engine::~Engine()
 
 bool Engine::init()
 {
-    // Initialize SDL
+    // ini SDL
     if (SDL_Init(SDL_INIT_VIDEO) < 0)
     {
         std::cerr << "SDL initialization failed: " << SDL_GetError() << std::endl;
         return false;
     }
 
-    // Create window
-    window = SDL_CreateWindow("3D Renderer Engine",
+    // window
+    window = SDL_CreateWindow("MULTI OBJECT 3D ENGINE THIS BETTER WORK!!!",
                               SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                               windowWidth, windowHeight,
                               SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
 
     if (!window)
     {
-        std::cerr << "Window creation failed: " << SDL_GetError() << std::endl;
+        std::cerr << "window creation failed: " << SDL_GetError() << std::endl;
         return false;
     }
 
-    // Create renderer
+    // create the renderer
     sdlRenderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
     if (!sdlRenderer)
     {
@@ -256,7 +56,7 @@ bool Engine::init()
         return false;
     }
 
-    // Create texture for framebuffer
+    // create texture for framebuffer
     frameTexture = SDL_CreateTexture(sdlRenderer, SDL_PIXELFORMAT_RGB24,
                                      SDL_TEXTUREACCESS_STREAMING,
                                      renderWidth, renderHeight);
@@ -267,24 +67,34 @@ bool Engine::init()
         return false;
     }
 
-    // Initialize timing
+    // initialize timing
     lastTime = std::chrono::high_resolution_clock::now();
 
     running = true;
 
-    std::cout << "Engine initialized successfully!" << std::endl;
+    // remove debugging later
+
+    std::cout << "Multi-Object Engine initialized successfully!" << std::endl;
+    std::cout << "\n=== MULTI-OBJECT CONTROLS ===" << std::endl;
+    std::cout << "  TAB - Select next object" << std::endl;
+    std::cout << "  SHIFT+TAB - Select previous object" << std::endl;
+    std::cout << "  X - Delete selected object" << std::endl;
+    std::cout << "  SHIFT+D - Duplicate selected object" << std::endl;
+    std::cout << "  L - Load new model (test3.obj)" << std::endl;
+    std::cout << "  N - Create empty node" << std::endl;
+    std::cout << "  I - Print scene hierarchy" << std::endl;
+    std::cout << "\n=== TRANSFORM SELECTED OBJECT ===" << std::endl;
+    std::cout << "  CTRL + Numpad - Move object (4/6=X, 8/2=Z, +/-=Y)" << std::endl;
+    std::cout << "  ALT + Numpad - Rotate object (4/6=Y, 8/2=X, 7/9=Z)" << std::endl;
+    std::cout << "  SHIFT + Numpad +/- - Scale object uniformly" << std::endl;
     std::cout << "\n=== CAMERA CONTROLS ===" << std::endl;
     std::cout << "  Mouse + Left Click - Orbit/Look around" << std::endl;
     std::cout << "  Mouse Wheel - Zoom in/out" << std::endl;
     std::cout << "  WASD - Pan view (orbit mode) / Move camera (free mode)" << std::endl;
     std::cout << "  Q/E - Move up/down" << std::endl;
     std::cout << "  R/F - Zoom in/out (alternative to mouse wheel)" << std::endl;
-    std::cout << "  G - Toggle camera mode (Orbit ⟷ Free-look)" << std::endl;
+    std::cout << "  G - Toggle camera mode (Orbit ↔ Free-look)" << std::endl;
     std::cout << "  H - Reset camera to default position" << std::endl;
-    std::cout << "\n=== ANIMATION CONTROLS ===" << std::endl;
-    std::cout << "  1-6 - Body animations (rotate, bounce, pulse, figure-8, nod, shake)" << std::endl;
-    std::cout << "  Space - Pause/Resume animation" << std::endl;
-    std::cout << "  R - Reset animation" << std::endl;
     std::cout << "\n=== OTHER CONTROLS ===" << std::endl;
     std::cout << "  Arrow keys - Move light source" << std::endl;
     std::cout << "  F - Toggle wireframe mode" << std::endl;
@@ -302,16 +112,16 @@ void Engine::zoomCamera(float amount)
 {
     if (orbitMode)
     {
-        // In orbit mode, change distance from target
+        // in orbit mode, change distance from target
         cameraDistance += amount;
-        cameraDistance = std::max(0.5f, std::min(50.0f, cameraDistance)); // Clamp distance
+        cameraDistance = std::max(0.5f, std::min(50.0f, cameraDistance)); // clamp distance
 
-        // Update camera position based on spherical coordinates
+        // update camera position based on spherical coordinates
         updateCameraPosition();
     }
     else
     {
-        // In free-look mode, move forward/backward
+        // in free-look mode, move forward/backward
         Vec3f forward = (scene.camera.target - scene.camera.position).normalize();
         scene.camera.position = scene.camera.position + forward * amount;
         scene.camera.target = scene.camera.target + forward * amount;
@@ -322,7 +132,7 @@ void Engine::panCamera(float deltaX, float deltaY)
 {
     if (orbitMode)
     {
-        // In orbit mode, move the target point
+        // in orbit mode, move the target point
         Vec3f forward = (scene.camera.target - scene.camera.position).normalize();
         Vec3f right = cross(forward, scene.camera.up).normalize();
         Vec3f up = cross(right, forward).normalize();
@@ -335,7 +145,7 @@ void Engine::panCamera(float deltaX, float deltaY)
     }
     else
     {
-        // In free-look mode, strafe and move up/down
+        // in free-look mode, strafe and move up/down
         Vec3f forward = (scene.camera.target - scene.camera.position).normalize();
         Vec3f right = cross(forward, scene.camera.up).normalize();
         Vec3f up = cross(right, forward).normalize();
@@ -353,7 +163,7 @@ void Engine::orbitCamera(float deltaYaw, float deltaPitch)
         cameraRotationY += deltaYaw;
         cameraRotationX += deltaPitch;
 
-        // Clamp pitch to avoid gimbal lock
+        // clamp pitch to avoid gimbal lock
         cameraRotationX = std::max(-1.5f, std::min(1.5f, cameraRotationX));
 
         updateCameraPosition();
@@ -364,7 +174,7 @@ void Engine::updateCameraPosition()
 {
     if (orbitMode)
     {
-        // Convert spherical coordinates to cartesian
+        // convert spherical coordinates to cartesian!!
         float cosX = cos(cameraRotationX);
         float sinX = sin(cameraRotationX);
         float cosY = cos(cameraRotationY);
@@ -382,7 +192,7 @@ void Engine::updateCameraPosition()
 
 void Engine::resetCamera()
 {
-    // Reset to default camera position
+    // reset to default camera position
     cameraDistance = 5.0f;
     cameraRotationX = 0.0f;
     cameraRotationY = 0.0f;
@@ -405,7 +215,7 @@ void Engine::toggleCameraMode()
     orbitMode = !orbitMode;
     if (orbitMode)
     {
-        // Switching to orbit mode - calculate current spherical coordinates
+        // switching to orbit mode, so must calculate current spherical coordinates
         Vec3f toCamera = scene.camera.position - scene.camera.target;
         cameraDistance = toCamera.norm();
         cameraTarget = scene.camera.target;
@@ -419,15 +229,164 @@ void Engine::toggleCameraMode()
     }
 }
 
+// multi-object scene management methods
+SceneNode *Engine::loadModel(const std::string &filename, const std::string &nodeName)
+{
+    SceneNode *node = scene.loadModel(filename, nodeName);
+    if (node)
+    {
+        std::cout << "Loaded model into scene: " << filename << std::endl;
+        // auto-select newly loaded model
+        scene.selectNode(node);
+    }
+    return node;
+}
+
+SceneNode *Engine::createEmptyNode(const std::string &nodeName)
+{
+    SceneNode *node = scene.createEmptyNode(nodeName);
+    if (node)
+    {
+        scene.selectNode(node);
+    }
+    return node;
+}
+
+void Engine::loadBackground(const std::string &filename)
+{
+    scene.loadBackground(filename);
+}
+
+// OBJECT SELECTION MODELS
+void Engine::selectNextObject()
+{
+    std::vector<SceneNode *> meshNodes;
+    scene.getAllMeshNodes(meshNodes);
+
+    if (meshNodes.empty())
+        return;
+
+    SceneNode *current = scene.getSelectedNode();
+    auto it = std::find(meshNodes.begin(), meshNodes.end(), current);
+
+    if (it == meshNodes.end())
+    {
+        // nothing selected or selected node not in mesh list
+        scene.selectNode(meshNodes[0]);
+    }
+    else
+    {
+        // move to next, wrap around
+        ++it;
+        if (it == meshNodes.end())
+            it = meshNodes.begin();
+        scene.selectNode(*it);
+    }
+}
+
+void Engine::selectPreviousObject()
+{
+    std::vector<SceneNode *> meshNodes;
+    scene.getAllMeshNodes(meshNodes);
+
+    if (meshNodes.empty())
+        return;
+
+    SceneNode *current = scene.getSelectedNode();
+    auto it = std::find(meshNodes.begin(), meshNodes.end(), current);
+
+    if (it == meshNodes.end())
+    {
+        // Nothing selected or selected node not in mesh list
+        scene.selectNode(meshNodes.back());
+    }
+    else
+    {
+        // Move to previous, wrap around
+        if (it == meshNodes.begin())
+        {
+            it = meshNodes.end();
+        }
+        --it;
+        scene.selectNode(*it);
+    }
+}
+
+void Engine::deleteSelectedObject()
+{
+    SceneNode *selected = scene.getSelectedNode();
+    if (selected && selected->name != "Root")
+    {
+        std::string nodeName = selected->name;
+        scene.deleteNode(nodeName);
+        std::cout << "Deleted object: " << nodeName << std::endl;
+    }
+}
+// TODO: limited duplicatign selection
+void Engine::duplicateSelectedObject()
+{
+    SceneNode *selected = scene.getSelectedNode();
+    if (selected && selected->hasModel())
+    {
+        // find the original model path (this is simplified for now. in practice we'd store this info)
+        // for now, we'll create an empty node and mention this limitation
+        SceneNode *duplicate = scene.createEmptyNode(selected->name + "_copy");
+        if (duplicate)
+        {
+            // copy transform
+            duplicate->localTransform = selected->localTransform;
+            duplicate->localTransform.position.x += 1.0f;
+            scene.selectNode(duplicate);
+            std::cout << "Created duplicate (empty node): " << duplicate->name << std::endl;
+            std::cout << "Note: Model duplication needs original file path - feature to be implemented" << std::endl;
+        }
+    }
+}
+
+// transform manipulation methods
+void Engine::moveSelectedObject(const Vec3f &delta)
+{
+    SceneNode *selected = scene.getSelectedNode();
+    if (selected)
+    {
+        selected->localTransform.position = selected->localTransform.position + delta;
+        std::cout << "Moved " << selected->name << " by (" << delta.x << ", " << delta.y << ", " << delta.z << ")" << std::endl;
+    }
+}
+
+void Engine::rotateSelectedObject(const Vec3f &delta)
+{
+    SceneNode *selected = scene.getSelectedNode();
+    if (selected)
+    {
+        selected->localTransform.rotation = selected->localTransform.rotation + delta;
+        std::cout << "Rotated " << selected->name << " by (" << delta.x << ", " << delta.y << ", " << delta.z << ")" << std::endl;
+    }
+}
+
+void Engine::scaleSelectedObject(const Vec3f &delta)
+{
+    SceneNode *selected = scene.getSelectedNode();
+    if (selected)
+    {
+        selected->localTransform.scale = selected->localTransform.scale + delta;
+        // clamp scale to prevent negative values
+        selected->localTransform.scale.x = std::max(0.1f, selected->localTransform.scale.x);
+        selected->localTransform.scale.y = std::max(0.1f, selected->localTransform.scale.y);
+        selected->localTransform.scale.z = std::max(0.1f, selected->localTransform.scale.z);
+        std::cout << "Scaled " << selected->name << " by (" << delta.x << ", " << delta.y << ", " << delta.z << ")" << std::endl;
+    }
+}
+
 void Engine::run()
 {
     while (running)
     {
         auto currentTime = std::chrono::high_resolution_clock::now();
 
-        // Ensure minimum deltaTime to prevent FPS spikes
+        // ensure minimum deltaTime to prevent FPS spikes
         float rawDeltaTime = std::chrono::duration<float>(currentTime - lastTime).count();
-        deltaTime = std::max(rawDeltaTime, 1.0f / 120.0f); // Minimum deltaTime = max 120 FPS
+        deltaTime = std::max(rawDeltaTime, 1.0f / 120.0f); // max 120 fps
 
         lastTime = currentTime;
 
@@ -436,8 +395,7 @@ void Engine::run()
         render();
         present();
 
-        // Force 30 FPS cap
-        SDL_Delay(33);
+        // SDL_Delay(33);
     }
 }
 
@@ -455,7 +413,7 @@ void Engine::handleEvents()
         case SDL_KEYDOWN:
             keys[event.key.keysym.scancode] = true;
 
-            // Handle single-press keys
+            // handle single-press keys
             switch (event.key.keysym.sym)
             {
             case SDLK_ESCAPE:
@@ -484,66 +442,39 @@ void Engine::handleEvents()
             case SDLK_h:
                 resetCamera();
                 break;
-            case SDLK_SPACE:
-                if (!scene.animatedModels.empty())
+
+            // object selection and manipulation
+            case SDLK_TAB:
+                if (keys[SDL_SCANCODE_LSHIFT])
                 {
-                    AnimatedModel *animModel = scene.animatedModels[0];
-                    if (animModel->animation.playing)
-                    {
-                        animModel->animation.pause();
-                        std::cout << "Animation paused" << std::endl;
-                    }
-                    else
-                    {
-                        animModel->animation.play();
-                        std::cout << "Animation resumed" << std::endl;
-                    }
+                    selectPreviousObject();
+                }
+                else
+                {
+                    selectNextObject();
                 }
                 break;
-            case SDLK_r:
-                if (!scene.animatedModels.empty())
+            case SDLK_x:
+                deleteSelectedObject();
+                break;
+            case SDLK_d:
+                if (keys[SDL_SCANCODE_LSHIFT])
                 {
-                    scene.animatedModels[0]->animation.stop();
-                    std::cout << "Animation reset" << std::endl;
+                    duplicateSelectedObject();
                 }
                 break;
-            case SDLK_1:
-                if (!scene.animatedModels.empty())
-                {
-                    scene.animatedModels[0]->startAnimation(AnimatedModel::ROTATE_Y, 3.0f);
-                }
+            case SDLK_l:
+                // Load a new model (example)
+                loadModel("obj/test3.obj");
                 break;
-            case SDLK_2:
-                if (!scene.animatedModels.empty())
-                {
-                    scene.animatedModels[0]->startAnimation(AnimatedModel::BOUNCE, 2.0f);
-                }
+            case SDLK_n:
+                // Create empty node
+                createEmptyNode();
                 break;
-            case SDLK_3:
-                if (!scene.animatedModels.empty())
-                {
-                    scene.animatedModels[0]->startAnimation(AnimatedModel::SCALE_PULSE, 2.5f);
-                }
+            case SDLK_i:
+                // Print scene hierarchy
+                scene.printSceneHierarchy();
                 break;
-            case SDLK_4:
-                if (!scene.animatedModels.empty())
-                {
-                    scene.animatedModels[0]->startAnimation(AnimatedModel::FIGURE_8, 4.0f);
-                }
-                break;
-            case SDLK_5:
-                if (!scene.animatedModels.empty())
-                {
-                    scene.animatedModels[0]->startAnimation(AnimatedModel::HEAD_NOD, 1.5f);
-                }
-                break;
-            case SDLK_6:
-                if (!scene.animatedModels.empty())
-                {
-                    scene.animatedModels[0]->startAnimation(AnimatedModel::HEAD_SHAKE, 1.8f);
-                }
-                break;
-                // REMOVED: All facial animation key handlers (7-0, -, =)
             }
             break;
 
@@ -576,7 +507,6 @@ void Engine::handleEvents()
             break;
 
         case SDL_MOUSEWHEEL:
-            // Mouse wheel for zooming
             if (event.wheel.y > 0)
             {
                 zoomCamera(-0.5f); // Zoom in
@@ -592,12 +522,88 @@ void Engine::handleEvents()
 
 void Engine::update()
 {
+
+    static int frameCount = 0;
+    frameCount++;
+    if (frameCount % 30 == 0)
+    { // Every 30 frames
+        std::cout << "Frame " << frameCount << " - FPS: " << getFPS() << std::endl;
+    }
     updateCamera();
 
-    // Update scene animations
-    scene.update(deltaTime);
+    // update scene transforms
+    scene.updateAllTransforms();
 
-    // Light controls with arrow keys
+    // object manipulation with keyboard
+    float moveSpeed = 2.0f * deltaTime;
+    float rotSpeed = 1.0f * deltaTime;
+    float scaleSpeed = 1.0f * deltaTime;
+
+    SceneNode *selected = scene.getSelectedNode();
+    if (selected)
+    {
+        Vec3f moveDelta(0, 0, 0);
+        Vec3f rotDelta(0, 0, 0);
+        Vec3f scaleDelta(0, 0, 0);
+
+        // Movement w/ ctrl
+        if (keys[SDL_SCANCODE_LCTRL])
+        {
+            if (keys[SDL_SCANCODE_KP_4])
+                moveDelta.x -= moveSpeed; // Numpad 4
+            if (keys[SDL_SCANCODE_KP_6])
+                moveDelta.x += moveSpeed; // Numpad 6
+            if (keys[SDL_SCANCODE_KP_8])
+                moveDelta.z -= moveSpeed; // Numpad 8
+            if (keys[SDL_SCANCODE_KP_2])
+                moveDelta.z += moveSpeed; // Numpad 2
+            if (keys[SDL_SCANCODE_KP_PLUS])
+                moveDelta.y += moveSpeed; // Numpad +
+            if (keys[SDL_SCANCODE_KP_MINUS])
+                moveDelta.y -= moveSpeed; // Numpad -
+
+            if (moveDelta.norm() > 0)
+            {
+                moveSelectedObject(moveDelta);
+            }
+        }
+        // rotation (with Alt modifier)
+        else if (keys[SDL_SCANCODE_LALT])
+        {
+            if (keys[SDL_SCANCODE_KP_4])
+                rotDelta.y -= rotSpeed;
+            if (keys[SDL_SCANCODE_KP_6])
+                rotDelta.y += rotSpeed;
+            if (keys[SDL_SCANCODE_KP_8])
+                rotDelta.x -= rotSpeed;
+            if (keys[SDL_SCANCODE_KP_2])
+                rotDelta.x += rotSpeed;
+            if (keys[SDL_SCANCODE_KP_7])
+                rotDelta.z -= rotSpeed;
+            if (keys[SDL_SCANCODE_KP_9])
+                rotDelta.z += rotSpeed;
+
+            if (rotDelta.norm() > 0)
+            {
+                rotateSelectedObject(rotDelta);
+            }
+        }
+        // scale (with Shift modifier)
+        else if (keys[SDL_SCANCODE_LSHIFT])
+        {
+            if (keys[SDL_SCANCODE_KP_PLUS])
+                scaleDelta = Vec3f(scaleSpeed, scaleSpeed, scaleSpeed);
+            if (keys[SDL_SCANCODE_KP_MINUS])
+                scaleDelta = Vec3f(-scaleSpeed, -scaleSpeed, -scaleSpeed);
+
+            if (scaleDelta.norm() > 0)
+            {
+                scaleSelectedObject(scaleDelta);
+            }
+        }
+    }
+
+    // light controls with arrow keys
     float lightSpeed = 2.0f * deltaTime;
     if (keys[SDL_SCANCODE_UP])
         scene.light.direction.z += lightSpeed;
@@ -619,7 +625,7 @@ void Engine::updateCamera()
     float panSpeed = 2.0f * deltaTime;
     float mouseSpeed = 0.003f;
 
-    // Mouse look / orbit
+    // mouse look / orbit
     if (mousePressed && (mouseDeltaX != 0 || mouseDeltaY != 0))
     {
         if (orbitMode)
@@ -628,7 +634,7 @@ void Engine::updateCamera()
         }
         else
         {
-            // Free-look mode (existing code)
+            //  free look mode
             Vec3f toCamera = scene.camera.position - scene.camera.target;
             float radius = toCamera.norm();
 
@@ -646,7 +652,7 @@ void Engine::updateCamera()
         mouseDeltaX = mouseDeltaY = 0;
     }
 
-    // Keyboard movement
+    // for keyboard movement
     Vec3f movement(0, 0, 0);
 
     // WASD for movement/panning
@@ -699,10 +705,10 @@ void Engine::render()
         zbuffer.set(i % renderWidth, i / renderWidth, TGAColor(0));
     }
 
-    // Draw background first
+    // draw the background AND THEN RENDER 3D SCENE
     drawBackground();
 
-    // Then render 3D scene (but don't clear framebuffer in renderScene)
+    // then render 3D scene (but don't clear framebuffer in renderScene)
     renderScene();
 }
 
@@ -711,7 +717,7 @@ void Engine::drawBackground()
     if (!scene.background)
         return;
 
-    // Scale and draw background to fill the framebuffer
+    // scale and draw background to fill the framebuffer
     int bgWidth = scene.background->get_width();
     int bgHeight = scene.background->get_height();
 
@@ -732,85 +738,220 @@ void Engine::drawBackground()
         }
     }
 }
+// // single pass versin
+// void Engine::renderScene()
+// {
+//     std::vector<SceneNode *> visibleMeshes;
+//     scene.getVisibleMeshNodes(visibleMeshes);
 
+//     if (visibleMeshes.empty())
+//     {
+//         return;
+//     }
+
+//     std::cout << "Rendering " << visibleMeshes.size() << " objects..." << std::endl;
+
+//     // Set up camera
+//     lookat(scene.camera.position, scene.camera.target, scene.camera.up);
+//     viewport(renderWidth / 8, renderHeight / 8, renderWidth * 3 / 4, renderHeight * 3 / 4);
+//     projection(scene.camera.fov);
+
+//     // Store original ModelView
+//     Matrix originalModelView = ModelView;
+
+//     // SIMPLIFIED: Skip shadow mapping for now - just render objects directly
+//     {
+//         // Clear Z-buffer only (preserve background)
+//         for (int i = 0; i < renderWidth * renderHeight; i++)
+//         {
+//             zbuffer.set(i % renderWidth, i / renderWidth, TGAColor(0));
+//         }
+
+//         // Simple shader without shadows for debugging
+//         for (SceneNode *meshNode : visibleMeshes)
+//         {
+//             Model *model = meshNode->model;
+//             Matrix nodeTransform = meshNode->getWorldMatrix();
+//             Matrix currentModelView = originalModelView * nodeTransform;
+
+//             // Set global shader variables
+//             ::model = model;
+//             light_dir = scene.light.direction;
+
+//             // Use a simple shader instead of shadow mapping
+//             struct SimpleShader : public IShader
+//             {
+//                 Matrix modelView;
+//                 Matrix normalTransform;
+//                 mat<2, 3, float> varying_uv;
+
+//                 SimpleShader(Matrix mv) : modelView(mv), normalTransform(mv.invert_transpose()) {}
+
+//                 virtual Vec4f vertex(int iface, int nthvert)
+//                 {
+//                     varying_uv.set_col(nthvert, ::model->uv(iface, nthvert));
+//                     Vec4f gl_Vertex = Viewport * Projection * modelView * embed<4>(::model->vert(iface, nthvert));
+//                     return gl_Vertex;
+//                 }
+
+//                 virtual bool fragment(Vec3f bar, TGAColor &color)
+//                 {
+//                     Vec2f uv = varying_uv * bar;
+
+//                     // Simple diffuse lighting
+//                     Vec3f n = proj<3>(normalTransform * embed<4>(::model->normal(uv))).normalize();
+//                     Vec3f l = proj<3>(modelView * embed<4>(light_dir)).normalize();
+//                     float diff = std::max(0.f, n * l);
+
+//                     TGAColor c = ::model->diffuse(uv);
+//                     for (int i = 0; i < 3; i++)
+//                     {
+//                         color[i] = std::min<float>(20 + c[i] * (0.3f + 0.7f * diff), 255);
+//                     }
+//                     return false;
+//                 }
+//             };
+
+//             SimpleShader shader(currentModelView);
+//             Matrix oldModelView = ModelView;
+//             ModelView = currentModelView;
+
+//             std::cout << "Rendering " << meshNode->name << " with " << model->nfaces() << " faces..." << std::endl;
+
+//             for (int i = 0; i < model->nfaces(); i++)
+//             {
+//                 Vec4f screen_coords[3];
+//                 for (int j = 0; j < 3; j++)
+//                 {
+//                     screen_coords[j] = shader.vertex(i, j);
+//                 }
+//                 triangle(screen_coords, shader, framebuffer, zbuffer);
+
+//                 // Progress indicator for large models
+//                 if (i % 1000 == 0 && i > 0)
+//                 {
+//                     std::cout << "  Face " << i << "/" << model->nfaces() << std::endl;
+//                 }
+//             }
+
+//             ModelView = oldModelView;
+//             std::cout << "Finished rendering " << meshNode->name << std::endl;
+//         }
+//     }
+
+//     ModelView = originalModelView;
+//     std::cout << "Frame rendering complete!" << std::endl;
+// }
+// TWO PASS RENDER PART!!
 void Engine::renderScene()
 {
-    if (scene.animatedModels.empty())
+    // get all visible mesh nodes instead of single animated model
+    std::vector<SceneNode *> visibleMeshes;
+    scene.getVisibleMeshNodes(visibleMeshes);
+
+    if (visibleMeshes.empty())
+    {
         return;
+    }
 
-    // Use first animated model for now
-    AnimatedModel *animModel = scene.animatedModels[0];
-    Model *model = animModel->model;
-
-    // Set up camera
+    // set up camera
     lookat(scene.camera.position, scene.camera.target, scene.camera.up);
     viewport(renderWidth / 8, renderHeight / 8, renderWidth * 3 / 4, renderHeight * 3 / 4);
     projection(scene.camera.fov);
 
-    // Apply model transformation
-    Matrix modelTransform = animModel->getTransformMatrix();
+    // store original ModelView
     Matrix originalModelView = ModelView;
-    ModelView = ModelView * modelTransform;
 
-    // PASS 1: Shadow mapping (use a separate temporary buffer to not mess with our background)
+    // PASS 1: Shadow mapping
     std::fill(shadowbuffer.begin(), shadowbuffer.end(), std::numeric_limits<float>::max());
 
     Matrix M;
     {
-        // Render from light's perspective for shadow mapping only
+        // render from light's perspective for shadow mapping
         lookat(scene.light.direction, Vec3f(0, 0, 0), scene.camera.up);
         viewport(renderWidth / 8, renderHeight / 8, renderWidth * 3 / 4, renderHeight * 3 / 4);
         projection(0); // Orthographic for directional light
 
-        // Apply model transform to shadow pass too
-        ModelView = ModelView * modelTransform;
         M = Viewport * Projection * ModelView;
 
-        // Create temporary buffers for shadow pass
+        // create temporary buffers for shadow pass
         TGAImage tempFrame(renderWidth, renderHeight, TGAImage::RGB);
         TGAImage tempZ(renderWidth, renderHeight, TGAImage::GRAYSCALE);
 
-        DepthShader depthShader;
-        for (int i = 0; i < model->nfaces(); i++)
+        // render all visible meshes for shadows
+        for (SceneNode *meshNode : visibleMeshes)
         {
-            Vec4f screen_coords[3];
-            for (int j = 0; j < 3; j++)
+            Model *model = meshNode->model;
+            Matrix nodeTransform = meshNode->getWorldMatrix();
+            Matrix shadowModelView = ModelView * nodeTransform;
+
+            // Set global shader variables -- this is also a temporary solution
+            ::model = model; // global variable for shaders
+
+            DepthShader depthShader;
+            Matrix oldModelView = ModelView;
+            ModelView = shadowModelView;
+
+            for (int i = 0; i < model->nfaces(); i++)
             {
-                screen_coords[j] = depthShader.vertex(i, j);
+                Vec4f screen_coords[3];
+                for (int j = 0; j < 3; j++)
+                {
+                    screen_coords[j] = depthShader.vertex(i, j);
+                }
+                triangle(screen_coords, depthShader, tempFrame, tempZ);
             }
-            triangle(screen_coords, depthShader, tempFrame, tempZ); // Use temp buffers
+
+            ModelView = oldModelView;
         }
     }
 
     // PASS 2: Main rendering with shadows (preserve background)
     {
-        // Restore camera perspective with model transform
+        // restore camera perspective
         lookat(scene.camera.position, scene.camera.target, scene.camera.up);
         viewport(renderWidth / 8, renderHeight / 8, renderWidth * 3 / 4, renderHeight * 3 / 4);
         projection(scene.camera.fov);
-        ModelView = originalModelView * modelTransform;
+        ModelView = originalModelView;
 
-        Matrix current_transform = Viewport * Projection * ModelView;
-        Matrix shadow_transform = M * (current_transform.adjugate() / current_transform.det());
-
-        ShadowMappingShader shader(ModelView,
-                                   (Projection * ModelView).invert_transpose(),
-                                   shadow_transform);
-
-        // Only clear the Z-buffer, keep the background in framebuffer
+        // only clear the Z-buffer, keep the background in framebuffer
         for (int i = 0; i < renderWidth * renderHeight; i++)
         {
             zbuffer.set(i % renderWidth, i / renderWidth, TGAColor(0));
         }
 
-        for (int i = 0; i < model->nfaces(); i++)
+        // render ALL visible meshes
+        for (SceneNode *meshNode : visibleMeshes)
         {
-            Vec4f screen_coords[3];
-            for (int j = 0; j < 3; j++)
+            Model *model = meshNode->model;
+            Matrix nodeTransform = meshNode->getWorldMatrix();
+            Matrix currentModelView = originalModelView * nodeTransform;
+
+            Matrix current_transform = Viewport * Projection * currentModelView;
+            Matrix shadow_transform = M * (current_transform.adjugate() / current_transform.det());
+
+            // set global shader variables -- temporary solution until i figure something out better
+            ::model = model;
+            light_dir = scene.light.direction;
+
+            ShadowMappingShader shader(currentModelView,
+                                       (Projection * currentModelView).invert_transpose(),
+                                       shadow_transform);
+
+            Matrix oldModelView = ModelView;
+            ModelView = currentModelView;
+
+            for (int i = 0; i < model->nfaces(); i++)
             {
-                screen_coords[j] = shader.vertex(i, j);
+                Vec4f screen_coords[3];
+                for (int j = 0; j < 3; j++)
+                {
+                    screen_coords[j] = shader.vertex(i, j);
+                }
+                triangle(screen_coords, shader, framebuffer, zbuffer);
             }
-            triangle(screen_coords, shader, framebuffer, zbuffer); // Render onto background
+
+            ModelView = oldModelView;
         }
     }
 
@@ -846,11 +987,11 @@ void Engine::present()
         SDL_UnlockTexture(frameTexture);
     }
 
-    // Render to screen
+    // render to screen
     SDL_SetRenderDrawColor(sdlRenderer, 0, 0, 0, 255);
     SDL_RenderClear(sdlRenderer);
 
-    // Scale texture to fit window
+    // scale texture to fit window
     SDL_Rect dstRect;
     float scaleX = (float)windowWidth / renderWidth;
     float scaleY = (float)windowHeight / renderHeight;
@@ -883,7 +1024,7 @@ void Engine::captureSequence(const std::string &baseName, int frameCount, float 
 
     for (int frame = 0; frame < frameCount; frame++)
     {
-        // Rotate camera around target
+        // rotate camera around target
         float angle = frame * angleStep;
         scene.camera.position.x = scene.camera.target.x + radius * cos(angle);
         scene.camera.position.z = scene.camera.target.z + radius * sin(angle);
@@ -906,14 +1047,26 @@ void Engine::updateWindowTitle()
     if (showStats)
     {
         std::ostringstream title;
-        title << "Grace's shitty 3D Engine - FPS: " << std::fixed << std::setprecision(1) << getFPS()
-              << " | Models: " << scene.animatedModels.size();
+        title << "Multi-Object 3D Engine - FPS: " << std::fixed << std::setprecision(1) << getFPS()
+              << " | Objects: " << scene.getMeshCount();
 
-        if (!scene.animatedModels.empty())
+        SceneNode *selected = scene.getSelectedNode();
+        if (selected)
         {
-            AnimatedModel *animModel = scene.animatedModels[0];
-            title << " | Anim: " << (animModel->animation.playing ? "Playing" : "Paused")
-                  << " (" << std::setprecision(1) << animModel->animation.getProgress() * 100 << "%)";
+            title << " | Selected: " << selected->name;
+            if (selected->hasModel())
+            {
+                title << " [MESH]";
+            }
+            else
+            {
+                title << " [EMPTY]";
+            }
+
+            // show transform info for selected object
+            Vec3f pos = selected->localTransform.position;
+            title << " | Pos:(" << std::setprecision(1)
+                  << pos.x << "," << pos.y << "," << pos.z << ")";
         }
 
         title << " | Light: (" << std::setprecision(2)
@@ -926,16 +1079,7 @@ void Engine::updateWindowTitle()
         SDL_SetWindowTitle(window, title.str().c_str());
     }
 }
-
-void Engine::loadModel(const std::string &filename)
-{
-    scene.addModel(filename);
-}
-
-void Engine::loadBackground(const std::string &filename)
-{
-    scene.loadBackground(filename);
-}
+// die
 
 void Engine::shutdown()
 {

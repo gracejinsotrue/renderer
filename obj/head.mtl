@@ -1,0 +1,12 @@
+# Blender 4.0.2 MTL File: 'Head Mesh (1).blend1'
+# www.blender.org
+
+newmtl skin_anime
+Ns 0.000000
+Ka 1.000000 1.000000 1.000000
+Kd 0.338928 0.194924 0.191333
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2

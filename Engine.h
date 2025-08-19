@@ -6,156 +6,10 @@
 #include <string>
 #include <chrono>
 #include "geometry.h"
-#include "model.h"
+#include "Scene.h" // new scene system!
 #include "our_gl.h"
 #include "tgaimage.h"
 #include "shaders.h"
-
-class Camera
-{
-public:
-    Vec3f position;
-    Vec3f target;
-    Vec3f up;
-    float fov;
-
-    Camera(Vec3f pos = Vec3f(0, 0, 3), Vec3f tgt = Vec3f(0, 0, 0), Vec3f u = Vec3f(0, 1, 0))
-        : position(pos), target(tgt), up(u), fov(-1.0f) {}
-
-    void rotate(float yaw, float pitch);
-    void move(Vec3f direction, float speed);
-    void lookAt(Vec3f eye, Vec3f center, Vec3f up_vec);
-};
-
-class Light
-{
-public:
-    Vec3f direction;
-    Vec3f color;
-    float intensity;
-
-    Light(Vec3f dir = Vec3f(1, 1, 1), Vec3f col = Vec3f(1, 1, 1), float intens = 1.0f)
-        : direction(dir), color(col), intensity(intens)
-    {
-        direction.normalize();
-    }
-};
-
-class Animation
-{
-public:
-    float duration;
-    bool loop;
-    bool playing;
-    float currentTime;
-
-    Animation(float dur = 1.0f, bool shouldLoop = true)
-        : duration(dur), loop(shouldLoop), playing(false), currentTime(0.0f) {}
-
-    void play()
-    {
-        playing = true;
-        currentTime = 0.0f;
-    }
-    void pause() { playing = false; }
-    void stop()
-    {
-        playing = false;
-        currentTime = 0.0f;
-    }
-
-    void update(float deltaTime)
-    {
-        if (!playing)
-            return;
-
-        currentTime += deltaTime;
-        if (currentTime >= duration)
-        {
-            if (loop)
-            {
-                currentTime = fmod(currentTime, duration);
-            }
-            else
-            {
-                currentTime = duration;
-                playing = false;
-            }
-        }
-    }
-
-    float getProgress() const { return currentTime / duration; }
-    float getTime() const { return currentTime; }
-};
-
-class Transform
-{
-public:
-    Vec3f position;
-    Vec3f rotation; // euler angles in radians
-    Vec3f scale;
-
-    Transform() : position(0, 0, 0), rotation(0, 0, 0), scale(1, 1, 1) {}
-
-    Matrix getMatrix() const;
-    void interpolate(const Transform &other, float t, Transform &result) const;
-};
-
-class AnimatedModel
-{
-public:
-    Model *model;
-    Transform transform;
-    Animation animation;
-
-    // Animation types
-    enum AnimationType
-    {
-        ROTATE_Y,
-        BOUNCE,
-        SCALE_PULSE,
-        FIGURE_8,
-        HEAD_NOD,
-        HEAD_SHAKE
-
-    };
-
-    AnimationType currentAnimation;
-    Transform baseTransform; // Starting transform
-
-    AnimatedModel(Model *m) : model(m), currentAnimation(ROTATE_Y)
-    {
-        baseTransform = transform;
-        std::cout << "AnimatedModel created for model with " << model->nverts() << " vertices" << std::endl;
-    }
-
-    ~AnimatedModel()
-    {
-    }
-
-    void startAnimation(AnimationType type, float duration = 2.0f, bool loop = true);
-    void update(float deltaTime);
-    Matrix getTransformMatrix() const { return transform.getMatrix(); }
-};
-
-class Scene
-{
-public:
-    std::vector<AnimatedModel *> animatedModels;
-    Camera camera;
-    Light light;
-    TGAImage *background;
-
-    Scene() : background(nullptr) {}
-    ~Scene();
-
-    void addModel(const std::string &filename);
-    void removeModel(int index);
-    void clear();
-    void loadBackground(const std::string &filename);
-    void clearBackground();
-    void update(float deltaTime); // update all animations
-};
 
 class Engine
 {
@@ -164,11 +18,11 @@ private:
     SDL_Renderer *sdlRenderer;
     SDL_Texture *frameTexture;
 
-    Scene scene;
+    Scene scene; // uses new scene system
     TGAImage framebuffer;
     TGAImage zbuffer;
 
-    // Timing
+    // for timing
     std::chrono::high_resolution_clock::time_point lastTime;
     float deltaTime;
 
@@ -188,11 +42,11 @@ private:
     int windowWidth, windowHeight;
 
     // Enhanced camera controls
-    float cameraDistance;  // Distance from target
-    float cameraRotationX; // Vertical rotation (pitch)
-    float cameraRotationY; // Horizontal rotation (yaw)
-    Vec3f cameraTarget;    // What we're looking at
-    bool orbitMode;        // Toggle between orbit and free-look
+    float cameraDistance;
+    float cameraRotationX;
+    float cameraRotationY;
+    Vec3f cameraTarget;
+    bool orbitMode;
 
 public:
     Engine(int winWidth = 1024, int winHeight = 768, int renWidth = 800, int renHeight = 800);
@@ -208,12 +62,24 @@ public:
     void render();
     void present();
 
-    // Scene management
+    // Scene management for multi-object
     Scene &getScene() { return scene; }
-    void loadModel(const std::string &filename);
+    SceneNode *loadModel(const std::string &filename, const std::string &nodeName = "");
+    SceneNode *createEmptyNode(const std::string &nodeName = "");
     void loadBackground(const std::string &filename);
 
-    // Enhanced camera controls
+    // Object selection and manipulation
+    void selectNextObject();
+    void selectPreviousObject();
+    void deleteSelectedObject();
+    void duplicateSelectedObject();
+
+    // Transform controls for selected object
+    void moveSelectedObject(const Vec3f &delta);
+    void rotateSelectedObject(const Vec3f &delta);
+    void scaleSelectedObject(const Vec3f &delta);
+
+    // Camera controls
     void updateCamera();
     void zoomCamera(float amount);
     void panCamera(float deltaX, float deltaY);
@@ -234,11 +100,10 @@ public:
     void updateWindowTitle();
     float getFPS() const
     {
-        // prevent division by zero and cap FPS display
         if (deltaTime <= 0.001f)
-            return 60.0f; // If deltaTime too small, return reasonable FPS
+            return 60.0f;
         float fps = 1.0f / deltaTime;
-        return std::min(fps, 60.0f); // Cap displayed FPS at 60 just because laptop skill issue
+        return std::min(fps, 60.0f);
     }
 };
 
