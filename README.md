@@ -1,10 +1,19 @@
 graphics rasterizer from scratch except the part where i use sdl2
 
+update 8/28
 has vertex deformation, can save it and loop through it!
-https://github.com/user-attachments/assets/c5aae74a-0311-40ad-aead-75d15b512f61
 
 
 
+
+https://github.com/user-attachments/assets/86575494-e7f1-4237-908c-08f876987c24
+
+
+
+https://github.com/user-attachments/assets/7ff0dcd0-e98a-43ae-a273-07f3e8cb663c
+
+
+8/26
 quite clearly a work in progress
 <img width="680" height="798" alt="image" src="https://github.com/user-attachments/assets/a10605f2-7ac6-47f9-b6be-587a96ff11ae" />
 
