@@ -1,4 +1,5 @@
 graphics rasterizer from scratch except the part where i use sdl2
+<img width="680" height="798" alt="image" src="https://github.com/user-attachments/assets/a10605f2-7ac6-47f9-b6be-587a96ff11ae" />
 
 update 8/28
 has vertex deformation, can save it and loop through it!
@@ -15,7 +16,7 @@ https://github.com/user-attachments/assets/7ff0dcd0-e98a-43ae-a273-07f3e8cb663c
 
 8/26
 quite clearly a work in progress
-<img width="680" height="798" alt="image" src="https://github.com/user-attachments/assets/a10605f2-7ac6-47f9-b6be-587a96ff11ae" />
+
 
 <img width="921" height="825" alt="image" src="https://github.com/user-attachments/assets/fe9a3ee1-736b-4a99-ab4a-5f45aa9b0fc6" />
 
