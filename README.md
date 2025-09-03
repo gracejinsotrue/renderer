@@ -18,10 +18,7 @@ https://github.com/user-attachments/assets/7ff0dcd0-e98a-43ae-a273-07f3e8cb663c
 
 
 8/26
-quite clearly a work in progress
 
-
-<img width="921" height="825" alt="image" src="https://github.com/user-attachments/assets/fe9a3ee1-736b-4a99-ab4a-5f45aa9b0fc6" />
 
 "oh, that's gore of my comfort character"
 
