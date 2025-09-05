@@ -68,6 +68,9 @@
         "xloctime": "cpp",
         "xmemory": "cpp",
         "xtr1common": "cpp",
-        "xtree": "cpp"
+        "xtree": "cpp",
+        "filesystem": "cpp",
+        "functional": "cpp",
+        "set": "cpp"
     }
 }

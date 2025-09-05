@@ -28,6 +28,7 @@ void projection(float coeff)
 {
     Projection = Matrix::identity();
     Projection[3][2] = coeff;
+    // Projection[2][3] = -1.0f / coeff;
 }
 
 void lookat(Vec3f eye, Vec3f center, Vec3f up)
