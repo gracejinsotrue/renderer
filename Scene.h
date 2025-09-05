@@ -17,8 +17,10 @@ public:
     Vec3f up;
     float fov;
 
+    // Camera(Vec3f pos = Vec3f(0, 0, 3), Vec3f tgt = Vec3f(0, 0, 0), Vec3f u = Vec3f(0, 1, 0))
+    //     : position(pos), target(tgt), up(u), fov(-1.0f) {}
     Camera(Vec3f pos = Vec3f(0, 0, 3), Vec3f tgt = Vec3f(0, 0, 0), Vec3f u = Vec3f(0, 1, 0))
-        : position(pos), target(tgt), up(u), fov(-1.0f) {}
+        : position(pos), target(tgt), up(u), fov(-0.8f) {}
 
     void rotate(float yaw, float pitch);
     void move(Vec3f direction, float speed);

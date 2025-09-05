@@ -1,6 +1,7 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <cmath>
 #include "model.h"
 
 Model::Model(const char *filename) : verts_(), faces_(), norms_(), uv_(), diffusemap_(), normalmap_(), specularmap_(), hasBackup_(false)
@@ -137,7 +138,7 @@ Vec3f Model::normal(int iface, int nthvert)
     return norms_[idx].normalize();
 }
 
-// NEW METHODS FOR ANIMATION
+// EXISTING ANIMATION METHODS
 void Model::setVertex(int i, const Vec3f &newPos)
 {
     if (i >= 0 && i < verts_.size())
@@ -183,4 +184,214 @@ void Model::restoreOriginalVertices()
         verts_ = originalVerts_;
         std::cout << "Restored original vertices" << std::endl;
     }
+}
+
+// NEW BLEND SHAPE METHODS
+void Model::addBlendShape(const std::string &name, const std::vector<Vec3f> &targetVertices)
+{
+    if (targetVertices.size() != verts_.size())
+    {
+        std::cerr << "Blend shape vertex count mismatch!" << std::endl;
+        return;
+    }
+
+    blendShapes[name] = targetVertices;
+    blendWeights[name] = 0.0f;
+    std::cout << "Added blend shape: " << name << std::endl;
+}
+
+void Model::setBlendWeight(const std::string &shapeName, float weight)
+{
+    if (blendShapes.find(shapeName) != blendShapes.end())
+    {
+        blendWeights[shapeName] = std::max(0.0f, std::min(1.0f, weight));
+        std::cout << "Set " << shapeName << " weight to " << weight << std::endl;
+    }
+}
+
+void Model::applyBlendShapes()
+{
+    if (!hasBackup_)
+    {
+        std::cout << "No backup vertices - creating backup now" << std::endl;
+        backupOriginalVertices();
+    }
+
+    // Start with original vertices
+    verts_ = originalVerts_;
+
+    // Apply each blend shape with its weight
+    for (const auto &shape : blendShapes)
+    {
+        const std::string &name = shape.first;
+        const std::vector<Vec3f> &targetVerts = shape.second;
+        float weight = blendWeights[name];
+
+        if (weight > 0.0f)
+        {
+            for (size_t i = 0; i < verts_.size(); i++)
+            {
+                Vec3f offset = (targetVerts[i] - originalVerts_[i]) * weight;
+                verts_[i] = verts_[i] + offset;
+            }
+        }
+    }
+
+    std::cout << "Applied blend shapes to " << verts_.size() << " vertices" << std::endl;
+}
+
+void Model::createTestBlendShapes()
+{
+    if (verts_.empty())
+    {
+        std::cerr << "No vertices to create blend shapes from!" << std::endl;
+        return;
+    }
+
+    std::cout << "Creating test blend shapes for " << verts_.size() << " vertices..." << std::endl;
+
+    // Create "expand" blend shape - push all vertices outward from center
+    std::vector<Vec3f> expandVerts = verts_;
+    Vec3f center(0, 0, 0);
+
+    // Calculate center
+    for (const Vec3f &v : verts_)
+    {
+        center = center + v;
+    }
+    center = center / float(verts_.size());
+
+    // Push vertices outward by 10%
+    for (size_t i = 0; i < expandVerts.size(); i++)
+    {
+        Vec3f direction = (expandVerts[i] - center).normalize();
+        expandVerts[i] = expandVerts[i] + direction * 0.1f;
+    }
+    addBlendShape("expand", expandVerts);
+
+    // Create "squash" blend shape - compress Y axis
+    std::vector<Vec3f> squashVerts = verts_;
+    for (Vec3f &v : squashVerts)
+    {
+        v.y *= 0.8f; // Compress vertically
+    }
+    addBlendShape("squash", squashVerts);
+
+    // Create "twist" blend shape - rotate upper vertices
+    std::vector<Vec3f> twistVerts = verts_;
+    for (size_t i = 0; i < twistVerts.size(); i++)
+    {
+        if (twistVerts[i].y > center.y)
+        {                       // Only affect upper vertices
+            float angle = 0.3f; // 17 degrees
+            float x = twistVerts[i].x;
+            float z = twistVerts[i].z;
+            twistVerts[i].x = x * cos(angle) - z * sin(angle);
+            twistVerts[i].z = x * sin(angle) + z * cos(angle);
+        }
+    }
+    addBlendShape("twist", twistVerts);
+
+    std::cout << "Created 3 test blend shapes: expand, squash, twist" << std::endl;
+}
+
+void Model::listBlendShapes() const
+{
+    if (blendShapes.empty())
+    {
+        std::cout << "No blend shapes saved." << std::endl;
+        return;
+    }
+
+    std::cout << "\n=== SAVED BLEND SHAPES ===" << std::endl;
+    int index = 1;
+    for (const auto &shape : blendShapes)
+    {
+        float weight = 0.0f;
+        auto weightIt = blendWeights.find(shape.first);
+        if (weightIt != blendWeights.end())
+        {
+            weight = weightIt->second;
+        }
+        std::cout << "  " << index << ". " << shape.first
+                  << " (current weight: " << (weight * 100) << "%)" << std::endl;
+        index++;
+    }
+    std::cout << "==========================" << std::endl;
+}
+
+std::vector<std::string> Model::getBlendShapeNames() const
+{
+    std::vector<std::string> names;
+    for (const auto &shape : blendShapes)
+    {
+        names.push_back(shape.first);
+    }
+    return names;
+}
+
+bool Model::hasBlendShape(const std::string &name) const
+{
+    return blendShapes.find(name) != blendShapes.end();
+}
+
+void Model::clearAllBlendWeights()
+{
+    for (auto &weight : blendWeights)
+    {
+        weight.second = 0.0f;
+    }
+    applyBlendShapes();
+    std::cout << "Cleared all blend shape weights - returned to neutral expression" << std::endl;
+}
+
+void Model::setExpressionByName(const std::string &name, float intensity)
+{
+    // Clear all weights first
+    clearAllBlendWeights();
+
+    // Set the target expression
+    if (hasBlendShape(name))
+    {
+        setBlendWeight(name, intensity);
+        applyBlendShapes();
+        std::cout << "Applied expression '" << name << "' at " << (intensity * 100) << "% intensity" << std::endl;
+    }
+    else
+    {
+        std::cout << "Expression '" << name << "' not found!" << std::endl;
+        listBlendShapes();
+    }
+}
+
+void Model::blendBetweenExpressions(const std::string &from, const std::string &to, float t)
+{
+    if (!hasBlendShape(from) || !hasBlendShape(to))
+    {
+        std::cout << "One or both expressions not found: '" << from << "', '" << to << "'" << std::endl;
+        return;
+    }
+
+    // Clear all weights
+    for (auto &weight : blendWeights)
+    {
+        weight.second = 0.0f;
+    }
+
+    // Blend between the two expressions
+    float fromWeight = 1.0f - t;
+    float toWeight = t;
+
+    setBlendWeight(from, fromWeight);
+    setBlendWeight(to, toWeight);
+    applyBlendShapes();
+
+    std::cout << "Blending " << (fromWeight * 100) << "% '" << from
+              << "' with " << (toWeight * 100) << "% '" << to << "'" << std::endl;
+}
+
+void Model::saveCurrentStateAsBlendShape(const std::string &name)
+{
+    addBlendShape(name, verts_);
+    std::cout << "Saved current vertex state as blend shape: '" << name << "'" << std::endl;
 }

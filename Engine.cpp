@@ -5,6 +5,15 @@
 #include <cmath>
 #include <algorithm>
 
+extern "C"
+{
+    bool initCudaRasterizer(int width, int height);
+    void cleanupCudaRasterizer();
+    void cudaClearBuffers();
+    void cudaRenderTriangle(const Vec4f &v0, const Vec4f &v1, const Vec4f &v2, const TGAColor &color);
+    void cudaCopyResults(TGAImage &framebuffer, TGAImage &zbuffer);
+}
+
 Engine::Engine(int winWidth, int winHeight, int renWidth, int renHeight)
     : window(nullptr), sdlRenderer(nullptr), frameTexture(nullptr),
       framebuffer(renWidth, renHeight, TGAImage::RGB), zbuffer(renWidth, renHeight, TGAImage::GRAYSCALE),
@@ -12,7 +21,10 @@ Engine::Engine(int winWidth, int winHeight, int renWidth, int renHeight)
       windowWidth(winWidth), windowHeight(winHeight), renderWidth(renWidth), renderHeight(renHeight),
       mouseX(0), mouseY(0), mouseDeltaX(0), mouseDeltaY(0), mousePressed(false),
       cameraDistance(5.0f), cameraRotationX(0.0f), cameraRotationY(0.0f),
-      cameraTarget(0, 0, 0), orbitMode(true)
+      cameraTarget(0, 0, 0), orbitMode(true), rayTracingEnabled(false), realtimeRT(nullptr),
+      vertexEditMode(false), currentExpressionIndex(0),
+      cuda_available(false), use_cuda_rendering(false)
+
 {
     // init imput state
     memset(keys, 0, sizeof(keys));
@@ -35,6 +47,9 @@ bool Engine::init()
         std::cerr << "SDL initialization failed: " << SDL_GetError() << std::endl;
         return false;
     }
+
+    // Initialize real-time ray tracer
+    realtimeRT = std::make_unique<RealtimeRayTracer>(renderWidth, renderHeight);
 
     // window
     window = SDL_CreateWindow("MULTI OBJECT 3D ENGINE THIS BETTER WORK!!!",
@@ -105,16 +120,46 @@ bool Engine::init()
     std::cout << "  ESC - Exit" << std::endl;
     std::cout << "\nDefault: Orbit Camera Mode - Mouse to orbit, WASD to pan, wheel to zoom" << std::endl;
 
+    cuda_available = initCudaRasterizer(renderWidth, renderHeight);
+    use_cuda_rendering = false;
+
+    if (cuda_available)
+    {
+        std::cout << "CUDA rasterizer available - press 'K' to toggle" << std::endl;
+    }
+    else
+    {
+        std::cout << "CUDA rasterizer not available - using CPU only" << std::endl;
+    }
+
     return true;
+}
+
+void Engine::toggleRealtimeRayTracing()
+{
+    if (realtimeRT)
+    {
+        realtimeRT->toggle();
+        if (realtimeRT->is_enabled())
+        {
+            realtimeRT->mark_scene_dirty(); // Force scene update
+        }
+    }
 }
 
 void Engine::zoomCamera(float amount)
 {
+    std::cout << "=== ZOOM DEBUG START ===" << std::endl;
+    std::cout << "zoomCamera called with amount: " << amount << std::endl;
+    std::cout << "orbitMode: " << orbitMode << ", cameraDistance: " << cameraDistance << std::endl;
+
     if (orbitMode)
     {
         // in orbit mode, change distance from target
         cameraDistance += amount;
         cameraDistance = std::max(0.5f, std::min(50.0f, cameraDistance)); // clamp distance
+
+        std::cout << "New cameraDistance: " << cameraDistance << std::endl;
 
         // update camera position based on spherical coordinates
         updateCameraPosition();
@@ -125,9 +170,9 @@ void Engine::zoomCamera(float amount)
         Vec3f forward = (scene.camera.target - scene.camera.position).normalize();
         scene.camera.position = scene.camera.position + forward * amount;
         scene.camera.target = scene.camera.target + forward * amount;
+        std::cout << "Free-look zoom applied" << std::endl;
     }
 }
-
 void Engine::panCamera(float deltaX, float deltaY)
 {
     if (orbitMode)
@@ -172,9 +217,10 @@ void Engine::orbitCamera(float deltaYaw, float deltaPitch)
 
 void Engine::updateCameraPosition()
 {
+    std::cout << "updateCameraPosition() called" << std::endl;
     if (orbitMode)
     {
-        // convert spherical coordinates to cartesian!!
+        // convert spherical coordinates to cartesian
         float cosX = cos(cameraRotationX);
         float sinX = sin(cameraRotationX);
         float cosY = cos(cameraRotationY);
@@ -187,6 +233,12 @@ void Engine::updateCameraPosition()
 
         scene.camera.position = cameraTarget + offset;
         scene.camera.target = cameraTarget;
+
+        // ADD THESE DEBUG LINES:
+        std::cout << "Updated camera position: (" << scene.camera.position.x
+                  << ", " << scene.camera.position.y << ", " << scene.camera.position.z << ")" << std::endl;
+        std::cout << "Camera target: (" << scene.camera.target.x
+                  << ", " << scene.camera.target.y << ", " << scene.camera.target.z << ")" << std::endl;
     }
 }
 
@@ -391,6 +443,9 @@ void Engine::run()
         lastTime = currentTime;
 
         handleEvents();
+
+        updateCamera();
+
         update();
         render();
         present();
@@ -416,12 +471,112 @@ void Engine::handleEvents()
             // handle single-press keys
             switch (event.key.keysym.sym)
             {
+
+            case SDLK_u:
+                toggleRealtimeRayTracing();
+                break;
+
+            // Quality controls
+            case SDLK_EQUALS: // '+' key
+            case SDLK_PLUS:
+                if (vertexEditMode)
+                {
+                    // In vertex edit mode, adjust deformation strength
+                    setDeformationStrength(vertexEditor.getDeformationStrength() * 1.2f);
+                }
+                else if (realtimeRT)
+                {
+                    realtimeRT->increase_quality();
+                }
+                break;
+
+            case SDLK_MINUS:
+                if (vertexEditMode)
+                {
+                    // In vertex edit mode, adjust deformation strength
+                    setDeformationStrength(vertexEditor.getDeformationStrength() * 0.8f);
+                }
+                else if (realtimeRT)
+                {
+                    realtimeRT->decrease_quality();
+                }
+                break;
+
+            // Blend strength controls
+            case SDLK_LEFTBRACKET: // '[' key
+                if (vertexEditMode)
+                {
+                    setSelectionRadius(vertexEditor.getSelectionRadius() * 0.8f);
+                }
+                else if (realtimeRT)
+                {
+                    realtimeRT->adjust_blend_strength(-0.1f);
+                }
+                break;
+
+            case SDLK_RIGHTBRACKET: // ']' key
+                if (vertexEditMode)
+                {
+                    setSelectionRadius(vertexEditor.getSelectionRadius() * 1.2f);
+                }
+                else if (realtimeRT)
+                {
+                    realtimeRT->adjust_blend_strength(0.1f);
+                }
+                break;
+
+            // Toggle features
+            case SDLK_o:
+                if (realtimeRT)
+                {
+                    realtimeRT->toggle_progress_overlay();
+                }
+                break;
+
+            case SDLK_m:
+                if (realtimeRT)
+                {
+                    realtimeRT->toggle_adaptive_quality();
+                }
+                break;
+
+            case SDLK_COMMA:
+                if (realtimeRT)
+                {
+                    realtimeRT->toggle_tile_boundaries();
+                }
+                break;
+
+            // Status display
+            case SDLK_j:
+                if (realtimeRT)
+                {
+                    realtimeRT->print_detailed_status();
+                }
+                break;
+
             case SDLK_ESCAPE:
-                running = false;
+                if (vertexEditMode)
+                {
+                    if (vertexEditor.getMode() == VertexEditor::BLEND_SHAPE_CREATE)
+                    {
+                        cancelBlendShape();
+                    }
+                    else
+                    {
+                        exitVertexEditMode();
+                    }
+                }
+                else
+                {
+                    running = false;
+                }
                 break;
-            case SDLK_f:
-                wireframe = !wireframe;
+
+            case SDLK_k:
+                toggleCudaRendering();
                 break;
+
             case SDLK_t:
                 showStats = !showStats;
                 break;
@@ -430,11 +585,33 @@ void Engine::handleEvents()
                 std::cout << "Frame captured!" << std::endl;
                 break;
             case SDLK_b:
-                scene.loadBackground("background.tga");
+                if (vertexEditMode)
+                {
+                    // Start blend shape recording
+                    std::cout << "Enter blend shape name: ";
+                    std::string name;
+                    std::getline(std::cin, name);
+                    if (!name.empty())
+                    {
+                        vertexEditor.setMode(VertexEditor::BLEND_SHAPE_CREATE);
+                        startRecordingBlendShape(name);
+                    }
+                }
+                else
+                {
+                    scene.loadBackground("background.tga");
+                }
                 break;
             case SDLK_c:
-                scene.clearBackground();
-                std::cout << "Background cleared!" << std::endl;
+                if (vertexEditMode)
+                {
+                    vertexEditor.clearSelection();
+                }
+                else
+                {
+                    scene.clearBackground();
+                    std::cout << "Background cleared!" << std::endl;
+                }
                 break;
             case SDLK_g:
                 toggleCameraMode();
@@ -464,18 +641,259 @@ void Engine::handleEvents()
                 }
                 break;
             case SDLK_l:
-                // Load a new model (example)
-                loadModel("obj/test3.obj");
+                loadModel("obj/head.obj");
                 break;
             case SDLK_n:
-                // Create empty node
                 createEmptyNode();
                 break;
             case SDLK_i:
-                // Print scene hierarchy
-                scene.printSceneHierarchy();
+                if (vertexEditMode)
+                {
+                    vertexEditor.invertSelection();
+                }
+                else
+                {
+                    scene.printSceneHierarchy();
+                }
+                break;
+            case SDLK_y:
+                std::cout << "Y key pressed! Starting ray trace..." << std::endl;
+                handleRayTracingInput();
+                break;
+
+            // ===== VERTEX EDIT MODE CONTROLS =====
+            case SDLK_v:
+                if (keys[SDL_SCANCODE_LCTRL])
+                {
+                    // Ctrl+V - Enter/Exit vertex edit mode
+                    if (vertexEditMode)
+                    {
+                        exitVertexEditMode();
+                    }
+                    else
+                    {
+                        enterVertexEditMode();
+                    }
+                }
+                else if (vertexEditMode)
+                {
+                    // V - Toggle vertex display
+                    toggleVertexDisplay();
+                }
+                break;
+
+            // Vertex edit mode controls (only active when in vertex edit mode)
+            case SDLK_1:
+                if (vertexEditMode)
+                {
+                    vertexEditor.setMode(VertexEditor::VERTEX_SELECT);
+                }
+                else
+                {
+                    // Keep existing F1 functionality for blend shape tests
+                    SceneNode *selected = scene.getSelectedNode();
+                    if (selected && selected->hasModel())
+                    {
+                        selected->model->createTestBlendShapes();
+                        std::cout << "Created test blend shapes for " << selected->name << std::endl;
+                    }
+                    else
+                    {
+                        std::cout << "Select a model first (TAB to cycle through objects)" << std::endl;
+                    }
+                }
+                break;
+            case SDLK_2:
+                if (vertexEditMode)
+                {
+                    vertexEditor.setMode(VertexEditor::VERTEX_DEFORM);
+                }
+                else
+                {
+                    // Keep existing F2 functionality
+                    SceneNode *selected = scene.getSelectedNode();
+                    if (selected && selected->hasModel())
+                    {
+                        static float expandWeight = 0.0f;
+                        expandWeight = (expandWeight >= 1.0f) ? 0.0f : expandWeight + 0.2f;
+                        selected->model->setBlendWeight("expand", expandWeight);
+                        selected->model->applyBlendShapes();
+                    }
+                }
+                break;
+            case SDLK_3:
+                if (vertexEditMode)
+                {
+                    vertexEditor.setMode(VertexEditor::BLEND_SHAPE_CREATE);
+                }
+                else
+                {
+                    // Keep existing F3 functionality
+                    SceneNode *selected = scene.getSelectedNode();
+                    if (selected && selected->hasModel())
+                    {
+                        static float squashWeight = 0.0f;
+                        squashWeight = (squashWeight >= 1.0f) ? 0.0f : squashWeight + 0.2f;
+                        selected->model->setBlendWeight("squash", squashWeight);
+                        selected->model->applyBlendShapes();
+                    }
+                }
+                break;
+
+            case SDLK_a:
+                if (vertexEditMode && !keys[SDL_SCANCODE_LCTRL])
+                {
+                    vertexEditor.selectAll();
+                }
+                break;
+            case SDLK_s:
+                if (vertexEditMode && !keys[SDL_SCANCODE_LCTRL])
+                {
+                    if (vertexEditor.getMode() == VertexEditor::BLEND_SHAPE_CREATE)
+                    {
+                        saveCurrentBlendShape();
+                    }
+                    else
+                    {
+                        vertexEditor.printStatus();
+                    }
+                }
+                break;
+            case SDLK_r:
+                if (vertexEditMode)
+                {
+                    vertexEditor.resetDeformation();
+                }
+                else
+                {
+                    std::cout << "R pressed - zoom in" << std::endl;
+                    zoomCamera(-0.25f);
+                }
+
+                break;
+            case SDLK_f:
+                if (vertexEditMode)
+                {
+                    wireframe = !wireframe;
+                }
+                else
+                {
+                    std::cout << "F pressed - zoom out" << std::endl;
+                    zoomCamera(0.25f);
+                }
+                break;
+
+            // ===== ORIGINAL F-KEY TEST CONTROLS =====
+            case SDLK_F1:
+                // Test: Create blend shapes for selected model
+                {
+                    SceneNode *selected = scene.getSelectedNode();
+                    if (selected && selected->hasModel())
+                    {
+                        selected->model->createTestBlendShapes();
+                        std::cout << "Created test blend shapes for " << selected->name << std::endl;
+                    }
+                    else
+                    {
+                        std::cout << "Select a model first (TAB to cycle through objects)" << std::endl;
+                    }
+                }
+                break;
+
+            case SDLK_F2:
+                // Test: Animate "expand" blend shape
+                {
+                    SceneNode *selected = scene.getSelectedNode();
+                    if (selected && selected->hasModel())
+                    {
+                        static float expandWeight = 0.0f;
+                        expandWeight = (expandWeight >= 1.0f) ? 0.0f : expandWeight + 0.2f;
+                        selected->model->setBlendWeight("expand", expandWeight);
+                        selected->model->applyBlendShapes();
+                    }
+                }
+                break;
+
+            case SDLK_F3:
+                // Test: Animate "squash" blend shape
+                {
+                    SceneNode *selected = scene.getSelectedNode();
+                    if (selected && selected->hasModel())
+                    {
+                        static float squashWeight = 0.0f;
+                        squashWeight = (squashWeight >= 1.0f) ? 0.0f : squashWeight + 0.2f;
+                        selected->model->setBlendWeight("squash", squashWeight);
+                        selected->model->applyBlendShapes();
+                    }
+                }
+                break;
+
+            case SDLK_F4:
+                // Test: Animate "twist" blend shape
+                {
+                    SceneNode *selected = scene.getSelectedNode();
+                    if (selected && selected->hasModel())
+                    {
+                        static float twistWeight = 0.0f;
+                        twistWeight = (twistWeight >= 1.0f) ? 0.0f : twistWeight + 0.2f;
+                        selected->model->setBlendWeight("twist", twistWeight);
+                        selected->model->applyBlendShapes();
+                    }
+                }
+                break;
+
+            case SDLK_F5:
+                // Reset all deformations
+                {
+                    SceneNode *selected = scene.getSelectedNode();
+                    if (selected && selected->hasModel())
+                    {
+                        selected->model->restoreOriginalVertices();
+                        std::cout << "Reset " << selected->name << " to original shape" << std::endl;
+                    }
+                }
+                break;
+            case SDLK_F6:
+                // List all saved blend shapes
+                listSavedBlendShapes();
+                break;
+
+            case SDLK_F7:
+                // Clear all expressions (return to neutral)
+                clearAllExpressions();
+                break;
+
+            case SDLK_F8:
+                // Cycle to next saved expression
+                cycleToNextExpression();
+                break;
+
+            case SDLK_F9:
+                // Cycle to previous saved expression
+                cycleToPreviousExpression();
+                break;
+
+            case SDLK_F10:
+                // Quick test: blend between first two expressions
+                {
+                    updateAvailableExpressions();
+                    if (availableExpressions.size() >= 2)
+                    {
+                        static float blendAmount = 0.0f;
+                        blendAmount += 0.25f;
+                        if (blendAmount > 1.0f)
+                            blendAmount = 0.0f;
+
+                        blendExpressions(availableExpressions[0], availableExpressions[1], blendAmount);
+                    }
+                    else
+                    {
+                        std::cout << "Need at least 2 saved expressions to blend!" << std::endl;
+                    }
+                }
                 break;
             }
+
             break;
 
         case SDL_KEYUP:
@@ -485,21 +903,52 @@ void Engine::handleEvents()
         case SDL_MOUSEBUTTONDOWN:
             if (event.button.button == SDL_BUTTON_LEFT)
             {
-                mousePressed = true;
-                SDL_SetRelativeMouseMode(SDL_TRUE);
+                if (vertexEditMode)
+                {
+                    // Convert screen coordinates to render coordinates
+                    int renderX = (event.button.x * renderWidth) / windowWidth;
+                    int renderY = (event.button.y * renderHeight) / windowHeight;
+
+                    Matrix viewMatrix = ModelView;
+                    Matrix projMatrix = Projection;
+                    vertexEditor.handleMouseClick(renderX, renderY, viewMatrix, projMatrix, renderWidth, renderHeight);
+                }
+                else
+                {
+                    mousePressed = true;
+                    SDL_SetRelativeMouseMode(SDL_TRUE);
+                }
             }
             break;
 
         case SDL_MOUSEBUTTONUP:
             if (event.button.button == SDL_BUTTON_LEFT)
             {
-                mousePressed = false;
-                SDL_SetRelativeMouseMode(SDL_FALSE);
+                if (vertexEditMode)
+                {
+                    vertexEditor.handleMouseRelease();
+                }
+                else
+                {
+                    mousePressed = false;
+                    SDL_SetRelativeMouseMode(SDL_FALSE);
+                }
             }
             break;
 
         case SDL_MOUSEMOTION:
-            if (mousePressed)
+            if (vertexEditMode && (event.motion.state & SDL_BUTTON_LMASK))
+            {
+                // Mouse drag in vertex edit mode
+                int renderX = (event.motion.x * renderWidth) / windowWidth;
+                int renderY = (event.motion.y * renderHeight) / windowHeight;
+
+                Matrix viewMatrix = ModelView;
+                Matrix projMatrix = Projection;
+                vertexEditor.handleMouseDrag(renderX, renderY, event.motion.xrel, event.motion.yrel,
+                                             viewMatrix, projMatrix, renderWidth, renderHeight);
+            }
+            else if (mousePressed)
             {
                 mouseDeltaX = event.motion.xrel;
                 mouseDeltaY = event.motion.yrel;
@@ -507,13 +956,33 @@ void Engine::handleEvents()
             break;
 
         case SDL_MOUSEWHEEL:
-            if (event.wheel.y > 0)
+            std::cout << "Mouse wheel event: y=" << event.wheel.y << ", vertexEditMode=" << vertexEditMode << std::endl;
+
+            if (vertexEditMode && vertexEditor.getMode() == VertexEditor::VERTEX_SELECT)
             {
-                zoomCamera(-0.5f); // Zoom in
+                std::cout << "Adjusting selection radius" << std::endl;
+                // Adjust selection radius with mouse wheel in vertex select mode
+                if (event.wheel.y > 0)
+                {
+                    setSelectionRadius(vertexEditor.getSelectionRadius() * 1.1f);
+                }
+                else if (event.wheel.y < 0)
+                {
+                    setSelectionRadius(vertexEditor.getSelectionRadius() * 0.9f);
+                }
             }
-            else if (event.wheel.y < 0)
+            else
             {
-                zoomCamera(0.5f); // Zoom out
+                std::cout << "Applying camera zoom" << std::endl;
+                // Normal camera zoom - OUTSIDE vertex edit mode
+                if (event.wheel.y > 0)
+                {
+                    zoomCamera(-0.25f); // Zoom in
+                }
+                else if (event.wheel.y < 0)
+                {
+                    zoomCamera(0.25f); // Zoom out
+                }
             }
             break;
         }
@@ -529,10 +998,15 @@ void Engine::update()
     { // Every 30 frames
         std::cout << "Frame " << frameCount << " - FPS: " << getFPS() << std::endl;
     }
-    updateCamera();
+    // updateCamera();
 
     // update scene transforms
     scene.updateAllTransforms();
+    // update rt ray tracer
+    if (realtimeRT)
+    {
+        realtimeRT->update_scene(scene);
+    }
 
     // object manipulation with keyboard
     float moveSpeed = 2.0f * deltaTime;
@@ -652,46 +1126,44 @@ void Engine::updateCamera()
         mouseDeltaX = mouseDeltaY = 0;
     }
 
-    // for keyboard movement
-    Vec3f movement(0, 0, 0);
-
-    // WASD for movement/panning
-    if (keys[SDL_SCANCODE_W])
-        movement.z += 1.0f; // Forward/Pan up
-    if (keys[SDL_SCANCODE_S])
-        movement.z -= 1.0f; // Back/Pan down
-    if (keys[SDL_SCANCODE_A])
-        movement.x -= 1.0f; // Left/Pan left
-    if (keys[SDL_SCANCODE_D])
-        movement.x += 1.0f; // Right/Pan right
-    if (keys[SDL_SCANCODE_Q])
-        movement.y -= 1.0f; // Down
-    if (keys[SDL_SCANCODE_E])
-        movement.y += 1.0f; // Up
-
-    // Zoom with R/F keys
-    if (keys[SDL_SCANCODE_R])
-        zoomCamera(-moveSpeed); // Zoom in
-    if (keys[SDL_SCANCODE_F])
-        zoomCamera(moveSpeed); // Zoom out
-
-    if (movement.norm() > 0)
+    // KEYBOARD MOVEMENT - ONLY OUTSIDE VERTEX EDIT MODE
+    if (!vertexEditMode)
     {
-        if (orbitMode)
-        {
-            // In orbit mode, WASD pans the view
-            panCamera(movement.x * panSpeed, movement.y * panSpeed);
+        Vec3f movement(0, 0, 0);
 
-            // W/S also zoom in orbit mode
-            if (movement.z != 0)
-            {
-                zoomCamera(movement.z * moveSpeed);
-            }
-        }
-        else
+        // WASD for movement/panning
+        if (keys[SDL_SCANCODE_W])
+            movement.z += 1.0f; // Forward/Pan up
+        if (keys[SDL_SCANCODE_S])
+            movement.z -= 1.0f; // Back/Pan down
+        if (keys[SDL_SCANCODE_A])
+            movement.x -= 1.0f; // Left/Pan left
+        if (keys[SDL_SCANCODE_D])
+            movement.x += 1.0f; // Right/Pan right
+        if (keys[SDL_SCANCODE_Q])
+            movement.y -= 1.0f; // Down
+        if (keys[SDL_SCANCODE_E])
+            movement.y += 1.0f; // Up
+
+        // Apply movement
+        if (movement.norm() > 0)
         {
-            // In free-look mode, use existing movement code
-            scene.camera.move(movement.normalize(), moveSpeed);
+            if (orbitMode)
+            {
+                // In orbit mode, WASD pans the view
+                panCamera(movement.x * panSpeed, movement.y * panSpeed);
+
+                // W/S also zoom in orbit mode
+                if (movement.z != 0)
+                {
+                    zoomCamera(movement.z * moveSpeed);
+                }
+            }
+            else
+            {
+                // In free-look mode, use existing movement code
+                scene.camera.move(movement.normalize(), moveSpeed);
+            }
         }
     }
 }
@@ -710,6 +1182,22 @@ void Engine::render()
 
     // then render 3D scene (but don't clear framebuffer in renderScene)
     renderScene();
+
+    // NEW: Add vertex editor overlay
+    if (vertexEditMode && vertexEditor.hasTarget())
+    {
+        vertexEditor.renderVertexOverlay(framebuffer, renderWidth, renderHeight);
+    }
+
+    // NEW: Add real-time ray tracing if enabled
+    if (realtimeRT && realtimeRT->is_enabled())
+    {
+        // Ray trace one tile this frame
+        realtimeRT->render_one_tile();
+
+        // Blend ray traced result with rasterizer
+        realtimeRT->blend_with_framebuffer(framebuffer);
+    }
 }
 
 void Engine::drawBackground()
@@ -738,111 +1226,7 @@ void Engine::drawBackground()
         }
     }
 }
-// // single pass versin
-// void Engine::renderScene()
-// {
-//     std::vector<SceneNode *> visibleMeshes;
-//     scene.getVisibleMeshNodes(visibleMeshes);
 
-//     if (visibleMeshes.empty())
-//     {
-//         return;
-//     }
-
-//     std::cout << "Rendering " << visibleMeshes.size() << " objects..." << std::endl;
-
-//     // Set up camera
-//     lookat(scene.camera.position, scene.camera.target, scene.camera.up);
-//     viewport(renderWidth / 8, renderHeight / 8, renderWidth * 3 / 4, renderHeight * 3 / 4);
-//     projection(scene.camera.fov);
-
-//     // Store original ModelView
-//     Matrix originalModelView = ModelView;
-
-//     // SIMPLIFIED: Skip shadow mapping for now - just render objects directly
-//     {
-//         // Clear Z-buffer only (preserve background)
-//         for (int i = 0; i < renderWidth * renderHeight; i++)
-//         {
-//             zbuffer.set(i % renderWidth, i / renderWidth, TGAColor(0));
-//         }
-
-//         // Simple shader without shadows for debugging
-//         for (SceneNode *meshNode : visibleMeshes)
-//         {
-//             Model *model = meshNode->model;
-//             Matrix nodeTransform = meshNode->getWorldMatrix();
-//             Matrix currentModelView = originalModelView * nodeTransform;
-
-//             // Set global shader variables
-//             ::model = model;
-//             light_dir = scene.light.direction;
-
-//             // Use a simple shader instead of shadow mapping
-//             struct SimpleShader : public IShader
-//             {
-//                 Matrix modelView;
-//                 Matrix normalTransform;
-//                 mat<2, 3, float> varying_uv;
-
-//                 SimpleShader(Matrix mv) : modelView(mv), normalTransform(mv.invert_transpose()) {}
-
-//                 virtual Vec4f vertex(int iface, int nthvert)
-//                 {
-//                     varying_uv.set_col(nthvert, ::model->uv(iface, nthvert));
-//                     Vec4f gl_Vertex = Viewport * Projection * modelView * embed<4>(::model->vert(iface, nthvert));
-//                     return gl_Vertex;
-//                 }
-
-//                 virtual bool fragment(Vec3f bar, TGAColor &color)
-//                 {
-//                     Vec2f uv = varying_uv * bar;
-
-//                     // Simple diffuse lighting
-//                     Vec3f n = proj<3>(normalTransform * embed<4>(::model->normal(uv))).normalize();
-//                     Vec3f l = proj<3>(modelView * embed<4>(light_dir)).normalize();
-//                     float diff = std::max(0.f, n * l);
-
-//                     TGAColor c = ::model->diffuse(uv);
-//                     for (int i = 0; i < 3; i++)
-//                     {
-//                         color[i] = std::min<float>(20 + c[i] * (0.3f + 0.7f * diff), 255);
-//                     }
-//                     return false;
-//                 }
-//             };
-
-//             SimpleShader shader(currentModelView);
-//             Matrix oldModelView = ModelView;
-//             ModelView = currentModelView;
-
-//             std::cout << "Rendering " << meshNode->name << " with " << model->nfaces() << " faces..." << std::endl;
-
-//             for (int i = 0; i < model->nfaces(); i++)
-//             {
-//                 Vec4f screen_coords[3];
-//                 for (int j = 0; j < 3; j++)
-//                 {
-//                     screen_coords[j] = shader.vertex(i, j);
-//                 }
-//                 triangle(screen_coords, shader, framebuffer, zbuffer);
-
-//                 // Progress indicator for large models
-//                 if (i % 1000 == 0 && i > 0)
-//                 {
-//                     std::cout << "  Face " << i << "/" << model->nfaces() << std::endl;
-//                 }
-//             }
-
-//             ModelView = oldModelView;
-//             std::cout << "Finished rendering " << meshNode->name << std::endl;
-//         }
-//     }
-
-//     ModelView = originalModelView;
-//     std::cout << "Frame rendering complete!" << std::endl;
-// }
-// TWO PASS RENDER PART!!
 void Engine::renderScene()
 {
     // get all visible mesh nodes instead of single animated model
@@ -854,110 +1238,277 @@ void Engine::renderScene()
         return;
     }
 
-    // set up camera
+    // Set up camera
     lookat(scene.camera.position, scene.camera.target, scene.camera.up);
     viewport(renderWidth / 8, renderHeight / 8, renderWidth * 3 / 4, renderHeight * 3 / 4);
     projection(scene.camera.fov);
 
-    // store original ModelView
+    // Store original ModelView
     Matrix originalModelView = ModelView;
 
-    // PASS 1: Shadow mapping
-    std::fill(shadowbuffer.begin(), shadowbuffer.end(), std::numeric_limits<float>::max());
-
-    Matrix M;
+    if (use_cuda_rendering && cuda_available)
     {
-        // render from light's perspective for shadow mapping
-        lookat(scene.light.direction, Vec3f(0, 0, 0), scene.camera.up);
-        viewport(renderWidth / 8, renderHeight / 8, renderWidth * 3 / 4, renderHeight * 3 / 4);
-        projection(0); // Orthographic for directional light
+        // CUDA rendering path
+        cudaClearBuffers();
 
-        M = Viewport * Projection * ModelView;
-
-        // create temporary buffers for shadow pass
-        TGAImage tempFrame(renderWidth, renderHeight, TGAImage::RGB);
-        TGAImage tempZ(renderWidth, renderHeight, TGAImage::GRAYSCALE);
-
-        // render all visible meshes for shadows
-        for (SceneNode *meshNode : visibleMeshes)
-        {
-            Model *model = meshNode->model;
-            Matrix nodeTransform = meshNode->getWorldMatrix();
-            Matrix shadowModelView = ModelView * nodeTransform;
-
-            // Set global shader variables -- this is also a temporary solution
-            ::model = model; // global variable for shaders
-
-            DepthShader depthShader;
-            Matrix oldModelView = ModelView;
-            ModelView = shadowModelView;
-
-            for (int i = 0; i < model->nfaces(); i++)
-            {
-                Vec4f screen_coords[3];
-                for (int j = 0; j < 3; j++)
-                {
-                    screen_coords[j] = depthShader.vertex(i, j);
-                }
-                triangle(screen_coords, depthShader, tempFrame, tempZ);
-            }
-
-            ModelView = oldModelView;
-        }
-    }
-
-    // PASS 2: Main rendering with shadows (preserve background)
-    {
-        // restore camera perspective
-        lookat(scene.camera.position, scene.camera.target, scene.camera.up);
-        viewport(renderWidth / 8, renderHeight / 8, renderWidth * 3 / 4, renderHeight * 3 / 4);
-        projection(scene.camera.fov);
-        ModelView = originalModelView;
-
-        // only clear the Z-buffer, keep the background in framebuffer
-        for (int i = 0; i < renderWidth * renderHeight; i++)
-        {
-            zbuffer.set(i % renderWidth, i / renderWidth, TGAColor(0));
-        }
-
-        // render ALL visible meshes
         for (SceneNode *meshNode : visibleMeshes)
         {
             Model *model = meshNode->model;
             Matrix nodeTransform = meshNode->getWorldMatrix();
             Matrix currentModelView = originalModelView * nodeTransform;
-
-            Matrix current_transform = Viewport * Projection * currentModelView;
-            Matrix shadow_transform = M * (current_transform.adjugate() / current_transform.det());
-
-            // set global shader variables -- temporary solution until i figure something out better
-            ::model = model;
-            light_dir = scene.light.direction;
-
-            ShadowMappingShader shader(currentModelView,
-                                       (Projection * currentModelView).invert_transpose(),
-                                       shadow_transform);
-
-            Matrix oldModelView = ModelView;
-            ModelView = currentModelView;
+            Matrix transform = Viewport * Projection * currentModelView;
 
             for (int i = 0; i < model->nfaces(); i++)
             {
-                Vec4f screen_coords[3];
+                Vec4f vertices[3];
                 for (int j = 0; j < 3; j++)
                 {
-                    screen_coords[j] = shader.vertex(i, j);
+                    Vec3f v = model->vert(i, j);
+                    vertices[j] = transform * embed<4>(v);
                 }
-                triangle(screen_coords, shader, framebuffer, zbuffer);
+
+                TGAColor color(150, 100, 100); // todo: fix
+                cudaRenderTriangle(vertices[0], vertices[1], vertices[2], color);
+            }
+        }
+
+        cudaCopyResults(framebuffer, zbuffer);
+    }
+    else
+    {
+        // Original CPU rendering path
+        std::fill(shadowbuffer.begin(), shadowbuffer.end(), std::numeric_limits<float>::max());
+
+        Matrix M;
+        {
+            // render from light's perspective for shadow mapping
+            lookat(scene.light.direction, Vec3f(0, 0, 0), scene.camera.up);
+            viewport(renderWidth / 8, renderHeight / 8, renderWidth * 3 / 4, renderHeight * 3 / 4);
+            projection(0); // Orthographic for directional light
+
+            M = Viewport * Projection * ModelView;
+
+            // create temporary buffers for shadow pass
+            TGAImage tempFrame(renderWidth, renderHeight, TGAImage::RGB);
+            TGAImage tempZ(renderWidth, renderHeight, TGAImage::GRAYSCALE);
+
+            // render all visible meshes for shadows
+            for (SceneNode *meshNode : visibleMeshes)
+            {
+                Model *model = meshNode->model;
+                Matrix nodeTransform = meshNode->getWorldMatrix();
+                Matrix shadowModelView = ModelView * nodeTransform;
+
+                // Set global shader variables -- this is also a temporary solution
+                ::model = model; // global variable for shaders
+
+                DepthShader depthShader;
+                Matrix oldModelView = ModelView;
+                ModelView = shadowModelView;
+
+                for (int i = 0; i < model->nfaces(); i++)
+                {
+                    Vec4f screen_coords[3];
+                    for (int j = 0; j < 3; j++)
+                    {
+                        screen_coords[j] = depthShader.vertex(i, j);
+                    }
+                    triangle(screen_coords, depthShader, tempFrame, tempZ);
+                }
+
+                ModelView = oldModelView;
+            }
+        }
+
+        // PASS 2: Main rendering with shadows (preserve background)
+        {
+            // restore camera perspective
+            lookat(scene.camera.position, scene.camera.target, scene.camera.up);
+            viewport(renderWidth / 8, renderHeight / 8, renderWidth * 3 / 4, renderHeight * 3 / 4);
+            projection(scene.camera.fov);
+            ModelView = originalModelView;
+
+            // only clear the Z-buffer, keep the background in framebuffer
+            for (int i = 0; i < renderWidth * renderHeight; i++)
+            {
+                zbuffer.set(i % renderWidth, i / renderWidth, TGAColor(0));
             }
 
-            ModelView = oldModelView;
+            // render ALL visible meshes
+            for (SceneNode *meshNode : visibleMeshes)
+            {
+                Model *model = meshNode->model;
+                Matrix nodeTransform = meshNode->getWorldMatrix();
+                Matrix currentModelView = originalModelView * nodeTransform;
+
+                Matrix current_transform = Viewport * Projection * currentModelView;
+                Matrix shadow_transform = M * (current_transform.adjugate() / current_transform.det());
+
+                // set global shader variables -- temporary solution until i figure something out better
+                ::model = model;
+                light_dir = scene.light.direction;
+
+                ShadowMappingShader shader(currentModelView,
+                                           (Projection * currentModelView).invert_transpose(),
+                                           shadow_transform);
+
+                Matrix oldModelView = ModelView;
+                ModelView = currentModelView;
+
+                for (int i = 0; i < model->nfaces(); i++)
+                {
+                    Vec4f screen_coords[3];
+                    for (int j = 0; j < 3; j++)
+                    {
+                        screen_coords[j] = shader.vertex(i, j);
+                    }
+                    triangle(screen_coords, shader, framebuffer, zbuffer);
+                }
+
+                ModelView = oldModelView;
+            }
         }
     }
 
     // restore original ModelView
     ModelView = originalModelView;
 }
+
+// // TWO PASS RENDER PART!!
+// void Engine::renderScene()
+// {
+//     // get all visible mesh nodes instead of single animated model
+//     std::vector<SceneNode *> visibleMeshes;
+//     scene.getVisibleMeshNodes(visibleMeshes);
+
+//     if (!visibleMeshes.empty())
+//     {
+//         Model *firstModel = visibleMeshes[0]->model;
+//         std::cout << "Model vertex count: " << firstModel->nverts() << std::endl;
+//         if (firstModel->nverts() > 0)
+//         {
+//             Vec3f firstVert = firstModel->vert(0);
+//             std::cout << "First vertex: " << firstVert.x << ", " << firstVert.y << ", " << firstVert.z << std::endl;
+//         }
+//     }
+
+//     if (visibleMeshes.empty())
+//     {
+//         return;
+//     }
+//     std::cout << "renderScene camera pos: " << scene.camera.position.x << ", " << scene.camera.position.y << ", " << scene.camera.position.z << std::endl;
+
+//     // set up camera
+//     std::cout << "=== RENDER DEBUG ===" << std::endl;
+//     std::cout << "Camera FOV: " << scene.camera.fov << std::endl;
+//     std::cout << "Camera position: " << scene.camera.position.x << ", " << scene.camera.position.y << ", " << scene.camera.position.z << std::endl;
+//     std::cout << "Camera target: " << scene.camera.target.x << ", " << scene.camera.target.y << ", " << scene.camera.target.z << std::endl;
+//     std::cout << "Camera distance from target: " << (scene.camera.position - scene.camera.target).norm() << std::endl;
+//     std::cout << "===================" << std::endl;
+
+//     lookat(scene.camera.position, scene.camera.target, scene.camera.up);
+//     viewport(renderWidth / 8, renderHeight / 8, renderWidth * 3 / 4, renderHeight * 3 / 4);
+//     projection(scene.camera.fov);
+
+//     // store original ModelView
+//     Matrix originalModelView = ModelView;
+
+//     // PASS 1: Shadow mapping
+//     std::fill(shadowbuffer.begin(), shadowbuffer.end(), std::numeric_limits<float>::max());
+
+//     Matrix M;
+//     {
+//         // render from light's perspective for shadow mapping
+//         lookat(scene.light.direction, Vec3f(0, 0, 0), scene.camera.up);
+//         viewport(renderWidth / 8, renderHeight / 8, renderWidth * 3 / 4, renderHeight * 3 / 4);
+//         projection(0); // Orthographic for directional light
+
+//         M = Viewport * Projection * ModelView;
+
+//         // create temporary buffers for shadow pass
+//         TGAImage tempFrame(renderWidth, renderHeight, TGAImage::RGB);
+//         TGAImage tempZ(renderWidth, renderHeight, TGAImage::GRAYSCALE);
+
+//         // render all visible meshes for shadows
+//         for (SceneNode *meshNode : visibleMeshes)
+//         {
+//             Model *model = meshNode->model;
+//             Matrix nodeTransform = meshNode->getWorldMatrix();
+//             Matrix shadowModelView = ModelView * nodeTransform;
+
+//             // Set global shader variables -- this is also a temporary solution
+//             ::model = model; // global variable for shaders
+
+//             DepthShader depthShader;
+//             Matrix oldModelView = ModelView;
+//             ModelView = shadowModelView;
+
+//             for (int i = 0; i < model->nfaces(); i++)
+//             {
+//                 Vec4f screen_coords[3];
+//                 for (int j = 0; j < 3; j++)
+//                 {
+//                     screen_coords[j] = depthShader.vertex(i, j);
+//                 }
+//                 triangle(screen_coords, depthShader, tempFrame, tempZ);
+//             }
+
+//             ModelView = oldModelView;
+//         }
+//     }
+
+//     // PASS 2: Main rendering with shadows (preserve background)
+//     {
+//         // restore camera perspective
+//         lookat(scene.camera.position, scene.camera.target, scene.camera.up);
+//         viewport(renderWidth / 8, renderHeight / 8, renderWidth * 3 / 4, renderHeight * 3 / 4);
+//         projection(scene.camera.fov);
+//         ModelView = originalModelView;
+
+//         // only clear the Z-buffer, keep the background in framebuffer
+//         for (int i = 0; i < renderWidth * renderHeight; i++)
+//         {
+//             zbuffer.set(i % renderWidth, i / renderWidth, TGAColor(0));
+//         }
+
+//         // render ALL visible meshes
+//         for (SceneNode *meshNode : visibleMeshes)
+//         {
+//             Model *model = meshNode->model;
+//             Matrix nodeTransform = meshNode->getWorldMatrix();
+//             Matrix currentModelView = originalModelView * nodeTransform;
+
+//             Matrix current_transform = Viewport * Projection * currentModelView;
+//             Matrix shadow_transform = M * (current_transform.adjugate() / current_transform.det());
+
+//             // set global shader variables -- temporary solution until i figure something out better
+//             ::model = model;
+//             light_dir = scene.light.direction;
+
+//             ShadowMappingShader shader(currentModelView,
+//                                        (Projection * currentModelView).invert_transpose(),
+//                                        shadow_transform);
+
+//             Matrix oldModelView = ModelView;
+//             ModelView = currentModelView;
+
+//             for (int i = 0; i < model->nfaces(); i++)
+//             {
+//                 Vec4f screen_coords[3];
+//                 for (int j = 0; j < 3; j++)
+//                 {
+//                     screen_coords[j] = shader.vertex(i, j);
+//                 }
+//                 triangle(screen_coords, shader, framebuffer, zbuffer);
+//             }
+
+//             ModelView = oldModelView;
+//         }
+//     }
+
+//     // restore original ModelView
+//     ModelView = originalModelView;
+// }
 
 void Engine::present()
 {
@@ -1102,4 +1653,615 @@ void Engine::shutdown()
     }
 
     SDL_Quit();
+}
+void Engine::rayTraceCurrentScene()
+{
+    std::cout << "rayTraceCurrentScene() called!" << std::endl;
+    std::cout << "Mesh count: " << scene.getMeshCount() << std::endl;
+
+    if (scene.getMeshCount() == 0)
+    {
+        std::cout << "No meshes to ray trace! Load a model first." << std::endl;
+        return;
+    }
+
+    std::cout << "\n🎬 Starting ray trace of current scene..." << std::endl;
+    std::cout << "Camera position: ("
+              << scene.camera.position.x << ", "
+              << scene.camera.position.y << ", "
+              << scene.camera.position.z << ")" << std::endl;
+
+    RayTracerInterface::ray_trace_scene(scene);
+}
+
+void Engine::handleRayTracingInput()
+{
+    rayTraceCurrentScene();
+}
+
+void Engine::toggleCudaRendering()
+{
+    if (cuda_available)
+    {
+        use_cuda_rendering = !use_cuda_rendering;
+        std::cout << "CUDA rendering: " << (use_cuda_rendering ? "ENABLED" : "DISABLED") << std::endl;
+    }
+    else
+    {
+        std::cout << "CUDA not available" << std::endl;
+    }
+}
+
+// VertexEditor implementation
+void Engine::VertexEditor::setTargetModel(SceneNode *node)
+{
+    if (!node || !node->hasModel())
+    {
+        std::cerr << "Invalid target for vertex editing" << std::endl;
+        return;
+    }
+
+    targetNode = node;
+    targetModel = node->model;
+
+    // Ensure model has backup vertices for editing
+    if (!targetModel->getVertices().empty())
+    {
+        targetModel->backupOriginalVertices();
+    }
+
+    // Initialize vertex colors for selection feedback
+    selectionColors.resize(targetModel->nverts(), Vec3f(1, 1, 1)); // White by default
+
+    std::cout << "Vertex editor targeting: " << node->name
+              << " (" << targetModel->nverts() << " vertices)" << std::endl;
+}
+
+void Engine::VertexEditor::setMode(EditMode mode)
+{
+    currentMode = mode;
+
+    switch (mode)
+    {
+    case NORMAL:
+        showVertices = false;
+        clearSelection();
+        std::cout << "NORMAL MODE" << std::endl;
+        break;
+    case VERTEX_SELECT:
+        showVertices = true;
+        std::cout << "VERTEX SELECT MODE - Click to select vertices, drag for radius selection" << std::endl;
+        std::cout << "Selected vertices will turn red. Use mouse wheel to adjust selection radius." << std::endl;
+        break;
+    case VERTEX_DEFORM:
+        showVertices = true;
+        std::cout << "VERTEX DEFORM MODE - Drag selected vertices to sculpt the mesh" << std::endl;
+        std::cout << "Use +/- keys to adjust deformation strength." << std::endl;
+        break;
+    case BLEND_SHAPE_CREATE:
+        showVertices = true;
+        std::cout << "BLEND SHAPE MODE - Sculpt the face, then save as expression" << std::endl;
+        std::cout << "Press B to start recording, S to save, Esc to cancel." << std::endl;
+        break;
+    }
+}
+
+void Engine::VertexEditor::selectVerticesInRadius(const Vec3f &worldPos, float radius)
+{
+    if (!targetModel)
+        return;
+
+    Matrix worldMatrix = targetNode->getWorldMatrix();
+    int added = 0;
+
+    for (int i = 0; i < targetModel->nverts(); i++)
+    {
+        // Transform vertex to world space
+        Vec3f localVert = targetModel->vert(i);
+        Vec4f worldVert4 = worldMatrix * embed<4>(localVert);
+        Vec3f worldVert(worldVert4[0] / worldVert4[3], worldVert4[1] / worldVert4[3], worldVert4[2] / worldVert4[3]);
+
+        // Check distance
+        float distance = (worldVert - worldPos).norm();
+        if (distance <= radius)
+        {
+            if (selectedVertices.find(i) == selectedVertices.end())
+            {
+                selectedVertices.insert(i);
+                selectionColors[i] = Vec3f(1, 0, 0); // Red for selected
+                added++;
+            }
+        }
+    }
+
+    if (added > 0)
+    {
+        std::cout << "Selected " << added << " more vertices (total: " << selectedVertices.size() << ")" << std::endl;
+    }
+}
+
+void Engine::VertexEditor::clearSelection()
+{
+    selectedVertices.clear();
+    for (auto &color : selectionColors)
+    {
+        color = Vec3f(1, 1, 1); // Reset to white
+    }
+    std::cout << "Selection cleared" << std::endl;
+}
+
+void Engine::VertexEditor::selectAll()
+{
+    if (!targetModel)
+        return;
+
+    selectedVertices.clear();
+    for (int i = 0; i < targetModel->nverts(); i++)
+    {
+        selectedVertices.insert(i);
+        selectionColors[i] = Vec3f(1, 0, 0); // Red for selected
+    }
+    std::cout << "Selected all " << targetModel->nverts() << " vertices" << std::endl;
+}
+
+void Engine::VertexEditor::invertSelection()
+{
+    if (!targetModel)
+        return;
+
+    std::set<int> newSelection;
+    for (int i = 0; i < targetModel->nverts(); i++)
+    {
+        if (selectedVertices.find(i) == selectedVertices.end())
+        {
+            newSelection.insert(i);
+            selectionColors[i] = Vec3f(1, 0, 0); // Red for selected
+        }
+        else
+        {
+            selectionColors[i] = Vec3f(1, 1, 1); // White for deselected
+        }
+    }
+    selectedVertices = newSelection;
+    std::cout << "Selection inverted - now " << selectedVertices.size() << " vertices selected" << std::endl;
+}
+
+void Engine::VertexEditor::applyDeformation(const Vec3f &direction, float strength)
+{
+    if (!targetModel || selectedVertices.empty())
+        return;
+
+    for (int vertexIndex : selectedVertices)
+    {
+        Vec3f currentPos = targetModel->vert(vertexIndex);
+        Vec3f newPos = currentPos + direction * strength;
+        targetModel->setVertex(vertexIndex, newPos);
+    }
+}
+
+Vec3f Engine::VertexEditor::screenToWorldRay(int screenX, int screenY, const Matrix &viewMatrix,
+                                             const Matrix &projMatrix, int renderWidth, int renderHeight)
+{
+    // This is a simplified approach - in a real system you'd do proper ray casting
+    // For now, we'll approximate based on the camera position and screen coordinates
+
+    if (!targetNode)
+        return Vec3f(0, 0, 0);
+
+    // Get model center as approximation
+    Vec3f modelCenter = targetNode->getWorldPosition();
+
+    // Convert screen coordinates to normalized device coordinates
+    float normalizedX = (2.0f * screenX / renderWidth) - 1.0f;
+    float normalizedY = 1.0f - (2.0f * screenY / renderHeight);
+
+    // Simple projection to world space around the model
+    return modelCenter + Vec3f(normalizedX, normalizedY, 0) * selectionRadius * 5.0f;
+}
+
+int Engine::VertexEditor::findClosestVertex(const Vec3f &worldPos, float maxDistance)
+{
+    if (!targetModel)
+        return -1;
+
+    Matrix worldMatrix = targetNode->getWorldMatrix();
+    int closestVertex = -1;
+    float closestDistance = maxDistance;
+
+    for (int i = 0; i < targetModel->nverts(); i++)
+    {
+        Vec3f localVert = targetModel->vert(i);
+        Vec4f worldVert4 = worldMatrix * embed<4>(localVert);
+        Vec3f worldVert(worldVert4[0] / worldVert4[3], worldVert4[1] / worldVert4[3], worldVert4[2] / worldVert4[3]);
+
+        float distance = (worldVert - worldPos).norm();
+        if (distance < closestDistance)
+        {
+            closestDistance = distance;
+            closestVertex = i;
+        }
+    }
+
+    return closestVertex;
+}
+
+void Engine::VertexEditor::handleMouseClick(int mouseX, int mouseY, const Matrix &viewMatrix,
+                                            const Matrix &projMatrix, int renderWidth, int renderHeight)
+{
+    if (currentMode == NORMAL || !targetModel)
+        return;
+
+    lastMouseX = mouseX;
+    lastMouseY = mouseY;
+
+    Vec3f worldPos = screenToWorldRay(mouseX, mouseY, viewMatrix, projMatrix, renderWidth, renderHeight);
+
+    switch (currentMode)
+    {
+    case VERTEX_SELECT:
+    {
+        // Select vertices in radius around click point
+        selectVerticesInRadius(worldPos, selectionRadius);
+        break;
+    }
+    case VERTEX_DEFORM:
+    case BLEND_SHAPE_CREATE:
+    {
+        if (!selectedVertices.empty())
+        {
+            startDeformation(worldPos);
+            isDragging = true;
+            lastMouseWorldPos = worldPos;
+        }
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+void Engine::VertexEditor::handleMouseDrag(int mouseX, int mouseY, int deltaX, int deltaY,
+                                           const Matrix &viewMatrix, const Matrix &projMatrix,
+                                           int renderWidth, int renderHeight)
+{
+    if (!isDragging || currentMode == VERTEX_SELECT)
+        return;
+
+    Vec3f currentWorldPos = screenToWorldRay(mouseX, mouseY, viewMatrix, projMatrix, renderWidth, renderHeight);
+    Vec3f dragDirection = currentWorldPos - lastMouseWorldPos;
+
+    if (dragDirection.norm() > 0.001f)
+    { // Avoid tiny movements
+        applyDeformation(dragDirection, deformationStrength);
+        lastMouseWorldPos = currentWorldPos;
+    }
+}
+
+void Engine::VertexEditor::handleMouseRelease()
+{
+    isDragging = false;
+    if (currentMode == VERTEX_DEFORM || currentMode == BLEND_SHAPE_CREATE)
+    {
+        endDeformation();
+    }
+}
+
+void Engine::VertexEditor::startDeformation(const Vec3f &center)
+{
+    deformationCenter = center;
+    isDeforming = true;
+}
+
+void Engine::VertexEditor::endDeformation()
+{
+    isDeforming = false;
+}
+
+void Engine::VertexEditor::resetDeformation()
+{
+    if (!targetModel)
+        return;
+
+    targetModel->restoreOriginalVertices();
+    std::cout << "Reset vertices to original positions" << std::endl;
+}
+
+void Engine::VertexEditor::startBlendShape(const std::string &name)
+{
+    if (!targetModel)
+        return;
+
+    currentBlendShapeName = name;
+    blendShapeStart = targetModel->getVertices();
+    recordingBlendShape = true;
+
+    std::cout << "Recording blend shape: '" << name << "'" << std::endl;
+    std::cout << "Sculpt your expression, then press 'S' to save or 'Esc' to cancel" << std::endl;
+}
+
+void Engine::VertexEditor::saveBlendShape()
+{
+    if (!recordingBlendShape || !targetModel)
+        return;
+
+    std::vector<Vec3f> currentVertices = targetModel->getVertices();
+    targetModel->addBlendShape(currentBlendShapeName, currentVertices);
+
+    recordingBlendShape = false;
+    std::cout << "Saved blend shape: '" << currentBlendShapeName << "'" << std::endl;
+}
+
+void Engine::VertexEditor::cancelBlendShape()
+{
+    if (!recordingBlendShape)
+        return;
+
+    // Restore to state when recording started
+    targetModel->restoreOriginalVertices();
+    recordingBlendShape = false;
+    std::cout << "Cancelled blend shape: '" << currentBlendShapeName << "'" << std::endl;
+}
+
+void Engine::VertexEditor::printStatus() const
+{
+    std::cout << "\n=== VERTEX EDITOR STATUS ===" << std::endl;
+    std::cout << "Mode: ";
+    switch (currentMode)
+    {
+    case NORMAL:
+        std::cout << "NORMAL";
+        break;
+    case VERTEX_SELECT:
+        std::cout << "VERTEX SELECT";
+        break;
+    case VERTEX_DEFORM:
+        std::cout << "VERTEX DEFORM";
+        break;
+    case BLEND_SHAPE_CREATE:
+        std::cout << "BLEND SHAPE CREATE";
+        break;
+    }
+    std::cout << std::endl;
+
+    if (targetModel)
+    {
+        std::cout << "Target: " << targetNode->name << " (" << targetModel->nverts() << " vertices)" << std::endl;
+        std::cout << "Selected: " << selectedVertices.size() << " vertices" << std::endl;
+        std::cout << "Selection radius: " << selectionRadius << std::endl;
+        std::cout << "Deformation strength: " << deformationStrength << std::endl;
+        std::cout << "Deformation radius: " << deformationRadius << std::endl;
+
+        if (recordingBlendShape)
+        {
+            std::cout << "Recording blend shape: '" << currentBlendShapeName << "'" << std::endl;
+        }
+    }
+    else
+    {
+        std::cout << "No target model selected" << std::endl;
+    }
+    std::cout << "=========================" << std::endl;
+}
+
+// Engine integration methods
+void Engine::enterVertexEditMode()
+{
+    SceneNode *selected = scene.getSelectedNode();
+    if (!selected || !selected->hasModel())
+    {
+        std::cout << "Select a model first to edit vertices (use TAB to cycle)" << std::endl;
+        return;
+    }
+
+    vertexEditMode = true;
+    vertexEditor.setTargetModel(selected);
+    vertexEditor.setMode(VertexEditor::VERTEX_SELECT);
+
+    std::cout << "\n=== ENTERED VERTEX EDIT MODE ===" << std::endl;
+    std::cout << "Target: " << selected->name << std::endl;
+    std::cout << "\n=== CONTROLS ===" << std::endl;
+    std::cout << "  1 - Select mode | 2 - Deform mode | 3 - Blend shape mode" << std::endl;
+    std::cout << "  Mouse Click - Select vertices in radius" << std::endl;
+    std::cout << "  Mouse Drag - Deform selected vertices (in deform mode)" << std::endl;
+    std::cout << "  Mouse Wheel - Adjust selection radius" << std::endl;
+    std::cout << "  C - Clear selection | A - Select all | I - Invert selection" << std::endl;
+    std::cout << "  +/- - Adjust deformation strength" << std::endl;
+    std::cout << "  B - Start blend shape recording" << std::endl;
+    std::cout << "  S - Save blend shape (when recording)" << std::endl;
+    std::cout << "  R - Reset to original shape" << std::endl;
+    std::cout << "  V - Toggle vertex display" << std::endl;
+    std::cout << "  Ctrl+V - Exit vertex edit mode" << std::endl;
+    std::cout << "==============================" << std::endl;
+
+    vertexEditor.printStatus();
+}
+
+void Engine::exitVertexEditMode()
+{
+    vertexEditMode = false;
+    vertexEditor.setMode(VertexEditor::NORMAL);
+    std::cout << "Exited vertex edit mode" << std::endl;
+}
+
+void Engine::toggleVertexDisplay()
+{
+    vertexEditor.toggleVertexDisplay();
+    std::cout << "Vertex display: " << (vertexEditor.isShowingVertices() ? "ON" : "OFF") << std::endl;
+}
+
+void Engine::setDeformationStrength(float strength)
+{
+    vertexEditor.setDeformationStrength(strength);
+    std::cout << "Deformation strength: " << vertexEditor.getDeformationStrength() << std::endl;
+}
+
+void Engine::setSelectionRadius(float radius)
+{
+    vertexEditor.setSelectionRadius(radius);
+    std::cout << "Selection radius: " << vertexEditor.getSelectionRadius() << std::endl;
+}
+
+void Engine::startRecordingBlendShape(const std::string &name)
+{
+    vertexEditor.startBlendShape(name);
+}
+
+void Engine::saveCurrentBlendShape()
+{
+    vertexEditor.saveBlendShape();
+}
+
+void Engine::cancelBlendShape()
+{
+    vertexEditor.cancelBlendShape();
+}
+
+void Engine::VertexEditor::renderVertexOverlay(TGAImage &framebuffer, int renderWidth, int renderHeight)
+{
+    if (!targetModel || !showVertices)
+        return;
+
+    Matrix worldMatrix = targetNode->getWorldMatrix();
+    Matrix viewProjection = Viewport * Projection * ModelView;
+
+    // Render all vertices as small dots
+    for (int i = 0; i < targetModel->nverts(); i++)
+    {
+        Vec3f localVert = targetModel->vert(i);
+        Vec4f worldVert4 = worldMatrix * embed<4>(localVert);
+        Vec3f worldVert(worldVert4[0] / worldVert4[3], worldVert4[1] / worldVert4[3], worldVert4[2] / worldVert4[3]);
+
+        // Project to screen
+        Vec4f screenPos = viewProjection * embed<4>(worldVert);
+        if (screenPos[3] > 0)
+        {
+            int screenX = screenPos[0] / screenPos[3];
+            int screenY = screenPos[1] / screenPos[3];
+
+            if (screenX >= 0 && screenX < renderWidth && screenY >= 0 && screenY < renderHeight)
+            {
+                // Choose color based on selection
+                TGAColor color = (selectedVertices.find(i) != selectedVertices.end()) ? TGAColor(255, 0, 0) : TGAColor(255, 255, 255);
+
+                // Draw small cross for vertex
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    for (int dy = -1; dy <= 1; dy++)
+                    {
+                        int px = screenX + dx;
+                        int py = screenY + dy;
+                        if (px >= 0 && px < renderWidth && py >= 0 && py < renderHeight)
+                        {
+                            framebuffer.set(px, py, color);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Enhanced blend shape playback methods
+void Engine::listSavedBlendShapes()
+{
+    SceneNode *selected = scene.getSelectedNode();
+    if (!selected || !selected->hasModel())
+    {
+        std::cout << "Select a model first to view its blend shapes" << std::endl;
+        return;
+    }
+
+    selected->model->listBlendShapes();
+}
+
+void Engine::triggerExpression(const std::string &name, float intensity)
+{
+    SceneNode *selected = scene.getSelectedNode();
+    if (!selected || !selected->hasModel())
+    {
+        std::cout << "Select a model first to trigger expressions" << std::endl;
+        return;
+    }
+
+    selected->model->setExpressionByName(name, intensity);
+}
+
+void Engine::clearAllExpressions()
+{
+    SceneNode *selected = scene.getSelectedNode();
+    if (!selected || !selected->hasModel())
+    {
+        std::cout << "Select a model first" << std::endl;
+        return;
+    }
+
+    selected->model->clearAllBlendWeights();
+}
+
+void Engine::updateAvailableExpressions()
+{
+    SceneNode *selected = scene.getSelectedNode();
+    if (!selected || !selected->hasModel())
+    {
+        availableExpressions.clear();
+        return;
+    }
+
+    availableExpressions = selected->model->getBlendShapeNames();
+    if (currentExpressionIndex >= availableExpressions.size())
+    {
+        currentExpressionIndex = 0;
+    }
+}
+
+void Engine::cycleToNextExpression()
+{
+    updateAvailableExpressions();
+
+    if (availableExpressions.empty())
+    {
+        std::cout << "No saved expressions found. Create some first!" << std::endl;
+        return;
+    }
+
+    currentExpressionIndex = (currentExpressionIndex + 1) % availableExpressions.size();
+    std::string currentExpr = availableExpressions[currentExpressionIndex];
+
+    triggerExpression(currentExpr, 1.0f);
+    std::cout << "Cycling expressions: [" << (currentExpressionIndex + 1)
+              << "/" << availableExpressions.size() << "] " << currentExpr << std::endl;
+}
+
+void Engine::cycleToPreviousExpression()
+{
+    updateAvailableExpressions();
+
+    if (availableExpressions.empty())
+    {
+        std::cout << "No saved expressions found. Create some first!" << std::endl;
+        return;
+    }
+
+    currentExpressionIndex--;
+    if (currentExpressionIndex < 0)
+    {
+        currentExpressionIndex = availableExpressions.size() - 1;
+    }
+
+    std::string currentExpr = availableExpressions[currentExpressionIndex];
+    triggerExpression(currentExpr, 1.0f);
+    std::cout << "Cycling expressions: [" << (currentExpressionIndex + 1)
+              << "/" << availableExpressions.size() << "] " << currentExpr << std::endl;
+}
+
+void Engine::blendExpressions(const std::string &expr1, const std::string &expr2, float blend)
+{
+    SceneNode *selected = scene.getSelectedNode();
+    if (!selected || !selected->hasModel())
+    {
+        std::cout << "Select a model first" << std::endl;
+        return;
+    }
+
+    selected->model->blendBetweenExpressions(expr1, expr2, blend);
 }
