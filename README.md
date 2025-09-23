@@ -1,5 +1,7 @@
 Real-time 3D graphics rendering engine from scratch except the part where i use sdl2. Has vertex editing and animation caching (e.g., sculpt facial expressions and save them as reusable animations)
-Supports multiple 3D objects via scene graph hierarchy 
+
+Supports multiple 3D objects via scene graph hierarchy. Cool camera too. 
+
 Definitely a work-in-progress passion project. Currently adding CUDA acceleration, trying to optimize performance for larger models 
 
 
