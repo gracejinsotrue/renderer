@@ -31,7 +31,7 @@ public:
     bool visible;
     bool selected;
 
-    // for the parent-child hiearchy
+    // for the parent-child (scenegraph) hiearchy
     SceneNode *parent;
     std::vector<std::unique_ptr<SceneNode>> children;
 

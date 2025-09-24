@@ -19,11 +19,7 @@ Engine::Engine(int winWidth, int winHeight, int renWidth, int renHeight)
       framebuffer(renWidth, renHeight, TGAImage::RGB), zbuffer(renWidth, renHeight, TGAImage::GRAYSCALE),
       running(false), wireframe(false), showStats(true),
       windowWidth(winWidth), windowHeight(winHeight), renderWidth(renWidth), renderHeight(renHeight),
-      mouseX(0), mouseY(0), mouseDeltaX(0), mouseDeltaY(0), mousePressed(false),
-      cameraDistance(5.0f), cameraRotationX(0.0f), cameraRotationY(0.0f),
-      cameraTarget(0, 0, 0), orbitMode(true), rayTracingEnabled(false), realtimeRT(nullptr),
-      vertexEditMode(false), currentExpressionIndex(0),
-      cuda_available(false), use_cuda_rendering(false)
+      mouseX(0), mouseY(0), mouseDeltaX(0), mouseDeltaY(0), lastMouseX(0), lastMouseY(0), mousePressed(false)
 
 {
     // init imput state
@@ -142,7 +138,7 @@ void Engine::toggleRealtimeRayTracing()
         realtimeRT->toggle();
         if (realtimeRT->is_enabled())
         {
-            realtimeRT->mark_scene_dirty(); // Force scene update
+            realtimeRT->mark_scene_dirty();
         }
     }
 }
@@ -208,33 +204,50 @@ void Engine::orbitCamera(float deltaYaw, float deltaPitch)
         cameraRotationY += deltaYaw;
         cameraRotationX += deltaPitch;
 
-        // clamp pitch to avoid gimbal lock
-        cameraRotationX = std::max(-1.5f, std::min(1.5f, cameraRotationX));
+        // normalize angles to prevent accumulation and wrapping issues
+        // Keep yaw in range [0, 2π]
+        while (cameraRotationY < 0)
+            cameraRotationY += 2.0f * M_PI;
+        while (cameraRotationY >= 2.0f * M_PI)
+            cameraRotationY -= 2.0f * M_PI;
+
+        // keep pitch in range [-π, π]
+        while (cameraRotationX < -M_PI)
+            cameraRotationX += 2.0f * M_PI;
+        while (cameraRotationX > M_PI)
+            cameraRotationX -= 2.0f * M_PI;
+
+        std::cout << "Mouse deltas - Yaw: " << deltaYaw << ", Pitch: " << deltaPitch << std::endl;
+        std::cout << "Normalized - X: " << cameraRotationX << ", Y: " << cameraRotationY << std::endl;
 
         updateCameraPosition();
     }
 }
-
 void Engine::updateCameraPosition()
 {
     std::cout << "updateCameraPosition() called" << std::endl;
     if (orbitMode)
     {
-        // convert spherical coordinates to cartesian
-        float cosX = cos(cameraRotationX);
-        float sinX = sin(cameraRotationX);
-        float cosY = cos(cameraRotationY);
-        float sinY = sin(cameraRotationY);
+        // debug the rotation values
+        std::cout << "cameraRotationX (pitch): " << cameraRotationX << " radians (" << (cameraRotationX * 180.0f / M_PI) << " degrees)" << std::endl;
+        std::cout << "cameraRotationY (yaw): " << cameraRotationY << " radians (" << (cameraRotationY * 180.0f / M_PI) << " degrees)" << std::endl;
+
+        // Standard spherical to cartesian conversion
+        // X rotation is pitch (up/down), Y rotation is yaw (left/right)
+        float cosPitch = cos(cameraRotationX);
+        float sinPitch = sin(cameraRotationX);
+        float cosYaw = cos(cameraRotationY);
+        float sinYaw = sin(cameraRotationY);
 
         Vec3f offset;
-        offset.x = cameraDistance * cosX * sinY;
-        offset.y = cameraDistance * sinX;
-        offset.z = cameraDistance * cosX * cosY;
+        offset.x = cameraDistance * cosPitch * sinYaw;
+        offset.y = cameraDistance * sinPitch;
+        offset.z = cameraDistance * cosPitch * cosYaw;
 
         scene.camera.position = cameraTarget + offset;
         scene.camera.target = cameraTarget;
 
-        // ADD THESE DEBUG LINES:
+        std::cout << "Camera offset: (" << offset.x << ", " << offset.y << ", " << offset.z << ")" << std::endl;
         std::cout << "Updated camera position: (" << scene.camera.position.x
                   << ", " << scene.camera.position.y << ", " << scene.camera.position.z << ")" << std::endl;
         std::cout << "Camera target: (" << scene.camera.target.x
@@ -267,7 +280,7 @@ void Engine::toggleCameraMode()
     orbitMode = !orbitMode;
     if (orbitMode)
     {
-        // switching to orbit mode, so must calculate current spherical coordinates
+        // switching to orbit mode
         Vec3f toCamera = scene.camera.position - scene.camera.target;
         cameraDistance = toCamera.norm();
         cameraTarget = scene.camera.target;
@@ -277,7 +290,18 @@ void Engine::toggleCameraMode()
     }
     else
     {
-        std::cout << "Switched to Free-Look Camera Mode" << std::endl;
+        // switching to free-look mode - set target to selected object or origin
+        SceneNode *selected = scene.getSelectedNode();
+        if (selected && selected->hasModel())
+        {
+            scene.camera.target = selected->getWorldPosition();
+        }
+        else
+        {
+            scene.camera.target = Vec3f(0, 0, 0);
+        }
+        std::cout << "Switched to Free-Look Camera Mode - rotating around "
+                  << scene.camera.target.x << "," << scene.camera.target.y << "," << scene.camera.target.z << std::endl;
     }
 }
 
@@ -587,7 +611,7 @@ void Engine::handleEvents()
             case SDLK_b:
                 if (vertexEditMode)
                 {
-                    // Start blend shape recording
+                    // start blend shape recording
                     std::cout << "Enter blend shape name: ";
                     std::string name;
                     std::getline(std::cin, name);
@@ -905,10 +929,9 @@ void Engine::handleEvents()
             {
                 if (vertexEditMode)
                 {
-                    // Convert screen coordinates to render coordinates
+                    // vertex edit mode handling
                     int renderX = (event.button.x * renderWidth) / windowWidth;
                     int renderY = (event.button.y * renderHeight) / windowHeight;
-
                     Matrix viewMatrix = ModelView;
                     Matrix projMatrix = Projection;
                     vertexEditor.handleMouseClick(renderX, renderY, viewMatrix, projMatrix, renderWidth, renderHeight);
@@ -916,7 +939,9 @@ void Engine::handleEvents()
                 else
                 {
                     mousePressed = true;
-                    SDL_SetRelativeMouseMode(SDL_TRUE);
+                    lastMouseX = event.button.x; // Store starting position
+                    lastMouseY = event.button.y;
+                    // DON'T use SDL_SetRelativeMouseMode - it's broken in WSL
                 }
             }
             break;
@@ -931,7 +956,7 @@ void Engine::handleEvents()
                 else
                 {
                     mousePressed = false;
-                    SDL_SetRelativeMouseMode(SDL_FALSE);
+                    // DON'T use SDL_SetRelativeMouseMode(SDL_FALSE)
                 }
             }
             break;
@@ -950,8 +975,17 @@ void Engine::handleEvents()
             }
             else if (mousePressed)
             {
-                mouseDeltaX = event.motion.xrel;
-                mouseDeltaY = event.motion.yrel;
+                // Calculate deltas manually instead of using broken SDL relative mode
+                int currentX = event.motion.x;
+                int currentY = event.motion.y;
+
+                mouseDeltaX = currentX - lastMouseX;
+                mouseDeltaY = currentY - lastMouseY;
+
+                lastMouseX = currentX;
+                lastMouseY = currentY;
+
+                std::cout << "Manual deltas: " << mouseDeltaX << ", " << mouseDeltaY << std::endl;
             }
             break;
 
@@ -1102,25 +1136,60 @@ void Engine::updateCamera()
     // mouse look / orbit
     if (mousePressed && (mouseDeltaX != 0 || mouseDeltaY != 0))
     {
+        std::cout << "Raw mouse deltas: " << mouseDeltaX << ", " << mouseDeltaY << std::endl;
+        // mouseDeltaX = std::max(-50, std::min(50, mouseDeltaX));
+        // mouseDeltaY = std::max(-50, std::min(50, mouseDeltaY));
         if (orbitMode)
         {
             orbitCamera(-mouseDeltaX * mouseSpeed, -mouseDeltaY * mouseSpeed);
         }
         else
         {
-            //  free look mode
-            Vec3f toCamera = scene.camera.position - scene.camera.target;
+            // True free-look mode - rotate around the selected object or scene center
+            Vec3f rotationCenter;
+
+            // Get the center point to rotate around
+            SceneNode *selected = scene.getSelectedNode();
+            if (selected && selected->hasModel())
+            {
+                rotationCenter = selected->getWorldPosition();
+            }
+            else
+            {
+                rotationCenter = Vec3f(0, 0, 0); // Default to origin if no object selected
+            }
+
+            // Calculate current direction from rotation center to camera
+            Vec3f toCamera = scene.camera.position - rotationCenter;
             float radius = toCamera.norm();
 
-            float theta = atan2(toCamera.z, toCamera.x) - mouseDeltaX * mouseSpeed;
-            float phi = acos(toCamera.y / radius) + mouseDeltaY * mouseSpeed;
-            phi = std::max(0.1f, std::min(3.04f, phi));
+            // Apply mouse rotation
+            float yawDelta = -mouseDeltaX * mouseSpeed;
+            float pitchDelta = -mouseDeltaY * mouseSpeed;
 
-            toCamera.x = radius * sin(phi) * cos(theta);
-            toCamera.y = radius * cos(phi);
-            toCamera.z = radius * sin(phi) * sin(theta);
+            // Convert to spherical coordinates
+            float currentYaw = atan2(toCamera.x, toCamera.z);
+            float currentPitch = asin(toCamera.y / radius);
 
-            scene.camera.position = scene.camera.target + toCamera;
+            // Apply deltas
+            currentYaw += yawDelta;
+            currentPitch += pitchDelta;
+
+            // Clamp pitch to prevent flipping
+            currentPitch = std::max(-1.5f, std::min(1.5f, currentPitch));
+
+            // Convert back to cartesian and update camera position
+            float cosP = cos(currentPitch);
+            float sinP = sin(currentPitch);
+            float cosY = cos(currentYaw);
+            float sinY = sin(currentYaw);
+
+            scene.camera.position.x = rotationCenter.x + radius * cosP * sinY;
+            scene.camera.position.y = rotationCenter.y + radius * sinP;
+            scene.camera.position.z = rotationCenter.z + radius * cosP * cosY;
+
+            // Always look at the rotation center
+            scene.camera.target = rotationCenter;
         }
 
         mouseDeltaX = mouseDeltaY = 0;

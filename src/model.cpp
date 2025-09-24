@@ -186,12 +186,12 @@ void Model::restoreOriginalVertices()
     }
 }
 
-// NEW BLEND SHAPE METHODS
+// blend shape
 void Model::addBlendShape(const std::string &name, const std::vector<Vec3f> &targetVertices)
 {
     if (targetVertices.size() != verts_.size())
     {
-        std::cerr << "Blend shape vertex count mismatch!" << std::endl;
+        std::cerr << "blend shape vertex count mismatch!" << std::endl;
         return;
     }
 
@@ -239,6 +239,7 @@ void Model::applyBlendShapes()
 
     std::cout << "Applied blend shapes to " << verts_.size() << " vertices" << std::endl;
 }
+// TODO: clear up this these tests now tha we know this works
 
 void Model::createTestBlendShapes()
 {
@@ -250,18 +251,18 @@ void Model::createTestBlendShapes()
 
     std::cout << "Creating test blend shapes for " << verts_.size() << " vertices..." << std::endl;
 
-    // Create "expand" blend shape - push all vertices outward from center
+    // ereate "expand" blend shape - push all vertices outward from center
     std::vector<Vec3f> expandVerts = verts_;
     Vec3f center(0, 0, 0);
 
-    // Calculate center
+    // calculate center
     for (const Vec3f &v : verts_)
     {
         center = center + v;
     }
     center = center / float(verts_.size());
 
-    // Push vertices outward by 10%
+    // push vertices outward by n%
     for (size_t i = 0; i < expandVerts.size(); i++)
     {
         Vec3f direction = (expandVerts[i] - center).normalize();
@@ -269,7 +270,7 @@ void Model::createTestBlendShapes()
     }
     addBlendShape("expand", expandVerts);
 
-    // Create "squash" blend shape - compress Y axis
+    // create "squash" blend shape - compress Y axis
     std::vector<Vec3f> squashVerts = verts_;
     for (Vec3f &v : squashVerts)
     {
@@ -277,13 +278,13 @@ void Model::createTestBlendShapes()
     }
     addBlendShape("squash", squashVerts);
 
-    // Create "twist" blend shape - rotate upper vertices
+    // create "twist" blend shape - rotate upper vertices
     std::vector<Vec3f> twistVerts = verts_;
     for (size_t i = 0; i < twistVerts.size(); i++)
     {
         if (twistVerts[i].y > center.y)
-        {                       // Only affect upper vertices
-            float angle = 0.3f; // 17 degrees
+        { // Only affect upper vertices
+            float angle = 0.3f;
             float x = twistVerts[i].x;
             float z = twistVerts[i].z;
             twistVerts[i].x = x * cos(angle) - z * sin(angle);
@@ -347,10 +348,10 @@ void Model::clearAllBlendWeights()
 
 void Model::setExpressionByName(const std::string &name, float intensity)
 {
-    // Clear all weights first
+    // clear all weights first
     clearAllBlendWeights();
 
-    // Set the target expression
+    // set the target expression
     if (hasBlendShape(name))
     {
         setBlendWeight(name, intensity);
@@ -372,13 +373,13 @@ void Model::blendBetweenExpressions(const std::string &from, const std::string &
         return;
     }
 
-    // Clear all weights
+    // clear all weights
     for (auto &weight : blendWeights)
     {
         weight.second = 0.0f;
     }
 
-    // Blend between the two expressions
+    // lerp blend between the two expressions
     float fromWeight = 1.0f - t;
     float toWeight = t;
 

@@ -54,17 +54,16 @@ public:
     void setBlendWeight(const std::string &shapeName, float weight);
     void applyBlendShapes();
 
-    // Test helper - create procedural deformations
+    // test helper - create procedural deformations. this needs to be changed now that i know it works (TODO)
     void createTestBlendShapes();
 
-    // Enhanced blend shape management
     void listBlendShapes() const;
     std::vector<std::string> getBlendShapeNames() const;
     bool hasBlendShape(const std::string &name) const;
     void clearAllBlendWeights();
     void setExpressionByName(const std::string &name, float intensity = 1.0f);
 
-    // Animation and interpolation
+    // animation and interpolation
     void blendBetweenExpressions(const std::string &from, const std::string &to, float t);
     void saveCurrentStateAsBlendShape(const std::string &name);
 };

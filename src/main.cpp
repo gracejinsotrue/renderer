@@ -1,4 +1,4 @@
-// main.cpp - Interactive Vertex Editor Version
+// main.cpp
 
 #include <iostream>
 #include "Engine.h"
@@ -7,7 +7,7 @@
 // include our unified math system (this will include ray tracer headers)
 #include "unified_math.h"
 
-// global variables for shaders (temporary bridge solution)
+// global variables for shaders
 Model *model = NULL;
 Vec3f light_dir(1, 1, 1);
 const int width = 800;
@@ -18,11 +18,11 @@ void test_math_integration()
 {
     std::cout << "\n=== TESTING UNIFIED MATH SYSTEM ===" << std::endl;
 
-    // Test 1: Basic conversion
+    // test 1: Basic conversion
     std::cout << "\n1. Testing basic vector conversion..." << std::endl;
     bool conversion_test = UnifiedMathTest::test_conversions();
 
-    // Test 2: Test unified math operations
+    // test 2: Test unified math operations
     std::cout << "\n2. Testing unified math operations..." << std::endl;
     UnifiedVec3 v1(1.0f, 2.0f, 3.0f);
     UnifiedVec3 v2(4.0f, 5.0f, 6.0f);
@@ -37,7 +37,7 @@ void test_math_integration()
     std::cout << "dot(v1, v2): " << dot_result << std::endl;
     std::cout << "length(v1): " << length_result << std::endl;
 
-    // Test 3: Ray conversion
+    // test 3: Ray conversion
     std::cout << "\n3. Testing ray conversion..." << std::endl;
     UnifiedRay unified_ray(UnifiedVec3(0, 0, 0), UnifiedVec3(1, 0, 0));
     rt_ray rt_ray_converted = unified_ray.to_rt_ray();
@@ -46,7 +46,7 @@ void test_math_integration()
     std::cout << "Original ray origin: (" << unified_ray.origin.x << ", " << unified_ray.origin.y << ", " << unified_ray.origin.z << ")" << std::endl;
     std::cout << "Converted back origin: (" << converted_back.origin.x << ", " << converted_back.origin.y << ", " << converted_back.origin.z << ")" << std::endl;
 
-    // Test 4: Color conversion
+    // test 4: Color conversion
     std::cout << "\n4. Testing color conversion..." << std::endl;
     rt_color rt_col(0.5, 0.7, 0.3);
     TGAColor tga_color = ColorConversion::rt_color_to_tga(rt_col);
@@ -65,7 +65,7 @@ int main(int argc, char **argv)
 {
     std::cout << "Starting Multi-Object 3D Engine with Interactive Vertex Editor..." << std::endl;
 
-    // NEW: Test our unified math system first
+    // Test our unified math system first
     test_math_integration();
 
     // create engine instance
@@ -148,15 +148,6 @@ int main(int argc, char **argv)
     std::cout << "  J - Show detailed ray tracing status" << std::endl;
     std::cout << "  Y - Offline ray trace to PPM file" << std::endl;
 
-    std::cout << "\n=== OBJECT MANIPULATION ===" << std::endl;
-    std::cout << "  TAB - Select next object" << std::endl;
-    std::cout << "  SHIFT+TAB - Select previous object" << std::endl;
-    std::cout << "  X - Delete selected object" << std::endl;
-    std::cout << "  SHIFT+D - Duplicate selected object" << std::endl;
-    std::cout << "  L - Load new model (test3.obj)" << std::endl;
-    std::cout << "  N - Create empty node" << std::endl;
-    std::cout << "  I - Print scene hierarchy (outside edit mode)" << std::endl;
-
     std::cout << "\n=== TRANSFORM SELECTED OBJECT ===" << std::endl;
     std::cout << "  CTRL + Numpad - Move object (4/6=X, 8/2=Z, +/-=Y)" << std::endl;
     std::cout << "  ALT + Numpad - Rotate object (4/6=Y, 8/2=X, 7/9=Z)" << std::endl;
@@ -170,13 +161,6 @@ int main(int argc, char **argv)
     std::cout << "  R/F - Zoom in/out (alternative to mouse wheel)" << std::endl;
     std::cout << "  G - Toggle camera mode (Orbit ↔ Free-look)" << std::endl;
     std::cout << "  H - Reset camera to default position" << std::endl;
-
-    std::cout << "\n=== VERTEX DEFORMATION TESTING (Legacy) ===" << std::endl;
-    std::cout << "  F1 - Create test blend shapes for selected model" << std::endl;
-    std::cout << "  F2 - Toggle 'expand' deformation (0-20-40-60-80-100%)" << std::endl;
-    std::cout << "  F3 - Toggle 'squash' deformation (0-20-40-60-80-100%)" << std::endl;
-    std::cout << "  F4 - Toggle 'twist' deformation (0-20-40-60-80-100%)" << std::endl;
-    std::cout << "  F5 - Reset to original shape" << std::endl;
 
     std::cout << "\n=== OTHER CONTROLS ===" << std::endl;
     std::cout << "  Arrow keys - Move light source" << std::endl;
@@ -196,15 +180,6 @@ int main(int argc, char **argv)
     std::cout << "6. Press B to name and record expressions" << std::endl;
     std::cout << "7. Press S to save the expression for later use" << std::endl;
     std::cout << "=========================================" << std::endl;
-
-    std::cout << "\n=== EXPRESSION PLAYBACK ===" << std::endl;
-    std::cout << "  F6 - List all saved expressions" << std::endl;
-    std::cout << "  F7 - Clear all expressions (neutral)" << std::endl;
-    std::cout << "  F8 - Cycle to next saved expression" << std::endl;
-    std::cout << "  F9 - Cycle to previous saved expression" << std::endl;
-    std::cout << "  F10 - Blend between first two expressions" << std::endl;
-
-    // Run the engine
     engine.run();
 
     std::cout << "Engine shutting down..." << std::endl;

@@ -240,7 +240,7 @@ extern "C" {
     
     void cudaRenderTriangle(const Vec4f& v0, const Vec4f& v1, const Vec4f& v2, const TGAColor& tga_color) {
         if (g_cuda_rasterizer) {
-            // Extract values from Vec4f and TGAColor using safe methods
+            // extract values from Vec4f and TGAColor
             TGAColor& color = const_cast<TGAColor&>(tga_color);
             
             g_cuda_rasterizer->renderTriangle(

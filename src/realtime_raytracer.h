@@ -8,17 +8,14 @@
 #include <iomanip>                  // For std::setprecision
 #include <chrono>
 
-// =============================================================================
-// REAL-TIME RAY TRACER - STEP 3B COMPLETE
-// =============================================================================
-
+// TODO: kind of a big WIP
 class RealtimeRayTracer
 {
 private:
     // Basic ray tracing settings
     int rt_width, rt_height;            // Ray trace resolution (lower than main framebuffer)
-    int tile_size;                      // Size of tiles to ray trace per frame
-    int current_tile_x, current_tile_y; // Current tile being ray traced
+    int tile_size;                      // size of tiles to ray trace per frame
+    int current_tile_x, current_tile_y; // current tile being ray traced
     int total_tiles_x, total_tiles_y;   // Total number of tiles
     bool is_active;                     // Whether real-time ray tracing is enabled
 
@@ -35,23 +32,22 @@ private:
     int frames_since_camera_move; // Reset tile progress when camera moves
     Vec3f last_camera_position;   // To detect camera movement
 
-    // NEW: Quality and performance settings
-    int quality_level;          // 1=fast, 2=medium, 3=high, 4=ultra
+    // Quality and performance settings
+    int quality_level;
     float blend_strength;       // How much to blend RT with rasterizer (0.0-1.0)
     bool show_progress_overlay; // Show visual progress indicator
-    bool adaptive_quality;      // Automatically adjust quality based on performance
+    bool adaptive_quality;      // automatically adjust quality based on performance
 
-    // NEW: Performance tracking
+    // performance racking
     std::chrono::high_resolution_clock::time_point last_frame_time;
     float average_frame_time; // Moving average of frame times
     int performance_samples;  // Number of samples for averaging
 
-    // NEW: Visual feedback
-    bool show_tile_boundaries; // Debug: show which tiles are being worked on
+    bool show_tile_boundaries;
 
 public:
     RealtimeRayTracer(int render_width, int render_height)
-        : rt_width(render_width / 2), rt_height(render_height / 2), // Half resolution for speed
+        : rt_width(render_width / 2), rt_height(render_height / 2), // half resolution for speed
           tile_size(16),                                            // 16x16 pixel tiles
           current_tile_x(0), current_tile_y(0),
           is_active(false),
@@ -60,11 +56,11 @@ public:
           world_needs_update(true),
           frames_since_camera_move(0),
           last_camera_position(0, 0, 0),
-          quality_level(2),     // Start with medium quality
+          quality_level(2),     // start with medium quality
           blend_strength(0.7f), // 70% ray traced, 30% rasterizer
           show_progress_overlay(true),
           adaptive_quality(false),
-          average_frame_time(16.67f), // Assume 60fps initially
+          average_frame_time(16.67f),
           performance_samples(0),
           show_tile_boundaries(false)
     {
@@ -92,7 +88,7 @@ public:
         if (is_active)
         {
             std::cout << "Real-time ray tracing ENABLED" << std::endl;
-            reset_tiles(); // Start fresh
+            reset_tiles(); // start fresh
         }
         else
         {
@@ -102,7 +98,6 @@ public:
 
     bool is_enabled() const { return is_active; }
 
-    // NEW: Quality control methods
     void increase_quality()
     {
         if (quality_level < 4)
@@ -190,7 +185,7 @@ public:
         rt_cam.vup = raster_to_rt(scene.camera.up);
     }
 
-    // ENHANCED: Better render method with performance tracking
+    // better render method with performance tracking
     void render_one_tile()
     {
         if (!is_active)
@@ -198,7 +193,7 @@ public:
 
         auto start_time = std::chrono::high_resolution_clock::now();
 
-        // Only ray trace if we have tiles left to do
+        // only ray trace if we have tiles left to do
         if (current_tile_y < total_tiles_y)
         {
             int tile_start_x = current_tile_x * tile_size;
@@ -206,7 +201,7 @@ public:
             int tile_end_x = std::min(tile_start_x + tile_size, rt_width);
             int tile_end_y = std::min(tile_start_y + tile_size, rt_height);
 
-            // Ray trace this tile with current quality settings
+            // ray trace this tile with current quality settings
             ray_trace_tile_enhanced(tile_start_x, tile_start_y, tile_end_x, tile_end_y);
 
             // Update progress overlay
@@ -224,14 +219,13 @@ public:
         float tile_time = std::chrono::duration<float, std::milli>(end_time - start_time).count();
         update_performance_stats(tile_time);
 
-        // Adaptive quality adjustment
         if (adaptive_quality)
         {
             adjust_quality_based_on_performance();
         }
     }
 
-    // ENHANCED: Better blending with multiple modes
+    // Better blending with multiple modes
     void blend_with_framebuffer(TGAImage &main_framebuffer)
     {
         if (!is_active)
@@ -255,15 +249,14 @@ public:
                 TGAColor rt_color = rt_framebuffer.get(rt_x, rt_y);
                 TGAColor raster_color = main_framebuffer.get(x, y);
 
-                // Enhanced blending: only blend where ray tracing has been done
                 bool has_rt_data = (rt_color[0] > 0 || rt_color[1] > 0 || rt_color[2] > 0);
 
                 if (has_rt_data)
                 {
-                    // Adaptive blending based on quality and progress
+
                     float current_blend = blend_strength;
 
-                    // Reduce blend strength for lower quality to avoid artifacts
+                    // reduce blend strength for lower quality to avoid artifacts
                     if (quality_level == 1)
                         current_blend *= 0.6f;
 
@@ -276,7 +269,7 @@ public:
                     main_framebuffer.set(x, y, blended);
                 }
 
-                // Add progress overlay if enabled
+                // add progress overlay if enabled
                 if (show_progress_overlay)
                 {
                     TGAColor overlay_color = progress_overlay.get(x, y);
@@ -300,7 +293,7 @@ public:
     {
         current_tile_x = 0;
         current_tile_y = 0;
-        rt_framebuffer.clear(); // Clear previous ray traced image
+        rt_framebuffer.clear(); // clear previous ray traced image
         if (show_progress_overlay)
         {
             progress_overlay.clear(); // Clear progress overlay
@@ -314,7 +307,7 @@ public:
         reset_tiles(); // Start over when scene changes
     }
 
-    // NEW: Enhanced status information
+    // status
     void print_detailed_status() const
     {
         if (!is_active)
@@ -355,7 +348,7 @@ public:
         std::cout << "====================================" << std::endl;
     }
 
-    // Debug info (simplified)
+    // debug info (simplified)
     void print_status() const
     {
         if (is_active)
@@ -373,38 +366,37 @@ private:
         // Adjust settings based on quality level
         switch (quality_level)
         {
-        case 1: // Fast
+        case 1: // fast
             rt_cam.samples_per_pixel = 1;
             rt_cam.max_depth = 2;
-            tile_size = 32; // Larger tiles for speed
+            tile_size = 32;
             break;
-        case 2: // Medium
+        case 2: // medium
             rt_cam.samples_per_pixel = 1;
             rt_cam.max_depth = 3;
             tile_size = 16;
             break;
-        case 3: // High
+        case 3: // high
             rt_cam.samples_per_pixel = 2;
             rt_cam.max_depth = 4;
             tile_size = 8;
             break;
-        case 4: // Ultra
+        case 4: // lutra
             rt_cam.samples_per_pixel = 4;
             rt_cam.max_depth = 6;
             tile_size = 8;
             break;
         }
 
-        // Recalculate tile counts
+        // recalculate tile counts
         total_tiles_x = (rt_width + tile_size - 1) / tile_size;
         total_tiles_y = (rt_height + tile_size - 1) / tile_size;
     }
 
     void ray_trace_tile_enhanced(int start_x, int start_y, int end_x, int end_y)
     {
-        // Enhanced ray tracing with multiple samples support
 
-        // Initialize ray tracer camera
+        // initialize ray tracer camera
         rt_point3 center = rt_cam.lookfrom;
 
         auto theta = degrees_to_radians(rt_cam.vfov);
@@ -425,17 +417,16 @@ private:
         auto viewport_upper_left = center - w - viewport_u / 2 - viewport_v / 2;
         rt_point3 pixel00_loc = viewport_upper_left + 0.5 * (pixel_delta_u + pixel_delta_v);
 
-        // Ray trace each pixel in the tile with multiple samples
+        // ray trace each pixel in the tile with multiple samples
         for (int y = start_y; y < end_y; y++)
         {
             for (int x = start_x; x < end_x; x++)
             {
                 rt_color pixel_color(0, 0, 0);
 
-                // Multi-sampling for higher quality
                 for (int sample = 0; sample < rt_cam.samples_per_pixel; sample++)
                 {
-                    // Add small random offset for anti-aliasing
+                    // small, random offset for anti-aliasing
                     float offset_x = (sample > 0) ? (random_double() - 0.5f) : 0.0f;
                     float offset_y = (sample > 0) ? (random_double() - 0.5f) : 0.0f;
 
@@ -447,7 +438,6 @@ private:
                     pixel_color += ray_color(r, rt_cam.max_depth);
                 }
 
-                // Average the samples
                 pixel_color = pixel_color / rt_cam.samples_per_pixel;
 
                 // Convert and store
@@ -482,10 +472,9 @@ private:
             }
         }
 
-        // Add tile boundary if enabled
         if (show_tile_boundaries)
         {
-            TGAColor boundary_color(100, 100, 0); // Yellow boundaries
+            TGAColor boundary_color(100, 100, 0); // yellow boundaries
 
             // Draw boundary lines
             for (int x = main_start_x; x < main_end_x; x++)
@@ -521,7 +510,7 @@ private:
 
     void update_performance_stats(float tile_time)
     {
-        // Update moving average of frame times
+        // update moving average of frame times
         performance_samples++;
         float alpha = 1.0f / std::min(60, performance_samples); // 60-sample moving average
         average_frame_time = average_frame_time * (1.0f - alpha) + tile_time * alpha;
@@ -529,17 +518,17 @@ private:
 
     void adjust_quality_based_on_performance()
     {
-        // Target: keep tile time under 2ms for smooth interaction
+        // target: keep tile time under 2ms for smooth interaction
         const float target_tile_time = 2.0f;
 
         if (average_frame_time > target_tile_time * 2.0f && quality_level > 1)
         {
-            // Too slow, decrease quality
+            // too slow, decrease quality
             decrease_quality();
         }
         else if (average_frame_time < target_tile_time * 0.5f && quality_level < 4)
         {
-            // Fast enough, increase quality
+            // fast enough, increase quality
             increase_quality();
         }
     }
@@ -559,7 +548,7 @@ private:
             return rt_color(0, 0, 0);
         }
 
-        // Black background
+        // black background
         return rt_color(0, 0, 0);
     }
 };
