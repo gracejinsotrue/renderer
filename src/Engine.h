@@ -11,7 +11,7 @@
 #include "our_gl.h"
 #include "tgaimage.h"
 #include "shaders.h"
-#include "ray_tracer_integration.h" // NEW: Ray tracer integration
+#include "ray_tracer_integration.h"
 #include "realtime_raytracer.h"
 
 extern "C"
@@ -30,7 +30,7 @@ private:
     SDL_Renderer *sdlRenderer;
     SDL_Texture *frameTexture;
 
-    Scene scene; // uses new scene system
+    Scene scene;
     TGAImage framebuffer;
     TGAImage zbuffer;
 
@@ -46,6 +46,7 @@ private:
     bool keys[SDL_NUM_SCANCODES];
     int mouseX, mouseY;
     int mouseDeltaX, mouseDeltaY;
+    int lastMouseX, lastMouseY;
     bool mousePressed;
 
     // Engine state
@@ -64,12 +65,10 @@ private:
     Vec3f cameraTarget;
     bool orbitMode;
 
-    // NEW: Ray tracing state
     bool rayTracingEnabled;
 
     std::unique_ptr<RealtimeRayTracer> realtimeRT;
 
-    // Interactive vertex editing system
     class VertexEditor
     {
     public:
@@ -86,25 +85,25 @@ private:
         Model *targetModel;
         SceneNode *targetNode;
 
-        // Selection state
+        // selection state
         std::set<int> selectedVertices;
         std::vector<Vec3f> selectionColors;
         bool showVertices;
         float vertexSize;
         float selectionRadius;
 
-        // Deformation state
+        // deformation state
         Vec3f deformationCenter;
         float deformationRadius;
         float deformationStrength;
         bool isDeforming;
 
-        // Blend shape creation
+        // blend shape creation
         std::string currentBlendShapeName;
         bool recordingBlendShape;
         std::vector<Vec3f> blendShapeStart;
 
-        // Mouse interaction
+        // mouse interaction
         Vec3f lastMouseWorldPos;
         bool isDragging;
         int lastMouseX, lastMouseY;
@@ -168,7 +167,6 @@ private:
         void toggleVertexDisplay() { showVertices = !showVertices; }
         bool isShowingVertices() const { return showVertices; }
 
-        // Rendering overlay (simplified - just status info)
         void renderSelectionInfo() const;
 
         void renderVertexOverlay(TGAImage &framebuffer, int renderWidth, int renderHeight);
@@ -177,7 +175,7 @@ private:
     VertexEditor vertexEditor;
     bool vertexEditMode;
 
-    // Expression cycling state
+    // expression cycling state
     int currentExpressionIndex;
     std::vector<std::string> availableExpressions;
     void updateAvailableExpressions();
@@ -230,36 +228,36 @@ public:
     void captureFrame(const std::string &filename);
     void captureSequence(const std::string &baseName, int frameCount, float duration);
 
-    // NEW: Ray tracing functionality
+    // for ray tracing
     void rayTraceCurrentScene();
     void handleRayTracingInput();
 
     void toggleRealtimeRayTracing();
 
-    // Vertex editing interface
+    // vertex editing interface
     void enterVertexEditMode();
     void exitVertexEditMode();
     void toggleVertexDisplay();
     void setVertexEditMode(VertexEditor::EditMode mode);
 
-    // Selection tools
+    // selection tools
     void selectVerticesInRadius(float radius);
     void clearVertexSelection();
     void selectAllVertices();
     void invertVertexSelection();
 
-    // Deformation tools
+    // deformation tools
     void setDeformationStrength(float strength);
     void setDeformationRadius(float radius);
     void setSelectionRadius(float radius);
     void resetVertexDeformation();
 
-    // Blend shape tools
+    // blend shape tools
     void startRecordingBlendShape(const std::string &name);
     void saveCurrentBlendShape();
     void cancelBlendShape();
 
-    // Enhanced blend shape playback
+    // blend shape playback
     void listSavedBlendShapes();
     void triggerExpression(const std::string &name, float intensity = 1.0f);
     void clearAllExpressions();
@@ -267,7 +265,7 @@ public:
     void cycleToPreviousExpression();
     void blendExpressions(const std::string &expr1, const std::string &expr2, float blend);
 
-    // Utility
+    // utility
     void updateWindowTitle();
     float getFPS() const
     {
