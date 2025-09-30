@@ -66,63 +66,67 @@ Vec3f barycentric(Vec2f A, Vec2f B, Vec2f C, Vec2f P)
 // this the hard part
 void triangle(Vec4f *pts, IShader &shader, TGAImage &image, TGAImage &zbuffer)
 {
-    // DEBUG: count how many triangles are being processed
-    static int triangle_count = 0;
-    triangle_count++;
-
-    // if (triangle_count % 500 == 0)
-    // {
-    //     std::cout << "Processing triangle " << triangle_count << std::endl;
-    // }
-
-    // if (triangle_count % 1000 == 0)
-    // {
-    //     std::cout << "Processing triangle " << triangle_count << std::endl;
-    //     std::cout << "  Vertex 0: (" << pts[0][0] / pts[0][3] << ", " << pts[0][1] / pts[0][3] << ", " << pts[0][2] / pts[0][3] << ")" << std::endl;
-    //     std::cout << "  Vertex 1: (" << pts[1][0] / pts[1][3] << ", " << pts[1][1] / pts[1][3] << ", " << pts[1][2] / pts[1][3] << ")" << std::endl;
-    //     std::cout << "  Vertex 2: (" << pts[2][0] / pts[2][3] << ", " << pts[2][1] / pts[2][3] << ", " << pts[2][2] / pts[2][3] << ")" << std::endl;
-    // }
-
-    // find the bounding box in screen space
-    Vec2f bboxmin(std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
-    Vec2f bboxmax(-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max());
+    // convert homogeneous coordinates to screen space first
+    Vec2f screen_coords[3];
     for (int i = 0; i < 3; i++)
     {
-        for (int j = 0; j < 2; j++)
-        {
-            // homogenous - >screen coord
-            bboxmin[j] = std::min(bboxmin[j], pts[i][j] / pts[i][3]);
-            bboxmax[j] = std::max(bboxmax[j], pts[i][j] / pts[i][3]);
-        }
+        screen_coords[i] = Vec2f(pts[i][0] / pts[i][3], pts[i][1] / pts[i][3]);
     }
 
-    // // DEBUG: Check if bounding box is valid
-    // if (triangle_count % 1000 == 0)
-    // {
-    //     std::cout << "  Bounding box: (" << bboxmin.x << ", " << bboxmin.y << ") to (" << bboxmax.x << ", " << bboxmax.y << ")" << std::endl;
-    // }
-    // rastrize by testing each pixel in bounding box
+    // we do a little backface culling: Check winding order using cross product
+    Vec2f edge1 = screen_coords[1] - screen_coords[0];
+    Vec2f edge2 = screen_coords[2] - screen_coords[0];
+    float cross = edge1.x * edge2.y - edge1.y * edge2.x;
+
+    // If cross product is POSITIVE!!!!, triangle faces away - skip it
+    if (cross >= 0.0f)
+    {
+        return;
+    }
+
+    // find bounding box in screen space
+    Vec2f bboxmin(std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
+    Vec2f bboxmax(-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max());
+
+    for (int i = 0; i < 3; i++)
+    {
+        bboxmin.x = std::min(bboxmin.x, screen_coords[i].x);
+        bboxmin.y = std::min(bboxmin.y, screen_coords[i].y);
+        bboxmax.x = std::max(bboxmax.x, screen_coords[i].x);
+        bboxmax.y = std::max(bboxmax.y, screen_coords[i].y);
+    }
+
+    // clamp to screen bounds (attmpt to optimize)
+    bboxmin.x = std::max(0.0f, bboxmin.x);
+    bboxmin.y = std::max(0.0f, bboxmin.y);
+    bboxmax.x = std::min((float)(image.get_width() - 1), bboxmax.x);
+    bboxmax.y = std::min((float)(image.get_height() - 1), bboxmax.y);
+
+    // reject if completely off-screen
+    if (bboxmax.x < 0 || bboxmin.x >= image.get_width() ||
+        bboxmax.y < 0 || bboxmin.y >= image.get_height())
+    {
+        return;
+    }
+
+    // rasterize by testing each pixel in bounding box
     Vec2i P;
     TGAColor color;
     for (P.x = bboxmin.x; P.x <= bboxmax.x; P.x++)
     {
         for (P.y = bboxmin.y; P.y <= bboxmax.y; P.y++)
         {
-            // calculate teh barycenetric coordinatse for this pixel
-            // tells us where the pixel is relative to the traingle!
-            Vec3f c = barycentric(proj<2>(pts[0] / pts[0][3]), proj<2>(pts[1] / pts[1][3]), proj<2>(pts[2] / pts[2][3]), proj<2>(P));
+            Vec3f c = barycentric(screen_coords[0], screen_coords[1], screen_coords[2], proj<2>(P));
             float z = pts[0][2] * c.x + pts[1][2] * c.y + pts[2][2] * c.z;
             float w = pts[0][3] * c.x + pts[1][3] * c.y + pts[2][3] * c.z;
             int frag_depth = std::max(0, std::min(255, int(z / w + .5)));
 
-            // skip if outside triangle or behind existing geometry (this is why we get from z buffer)
             if (c.x < 0 || c.y < 0 || c.z < 0 || zbuffer.get(P.x, P.y)[0] > frag_depth)
                 continue;
-            // run the fragment shader to calculate final pixel
+
             bool discard = shader.fragment(c, color);
             if (!discard)
             {
-                // update depth buffer & color buffer
                 zbuffer.set(P.x, P.y, TGAColor(frag_depth));
                 image.set(P.x, P.y, color);
             }
