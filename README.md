@@ -36,3 +36,10 @@ like any 3d engine, at certain angles, the geometry will look very weird.
 
 <img width="1072" height="772" alt="image" src="https://github.com/user-attachments/assets/417d48da-3507-4827-9967-1f8074b4de8c" />
 
+Bro the way I learned Blender from scratch for this too:
+
+<img width="1356" height="1011" alt="image" src="https://github.com/user-attachments/assets/0f20a506-57b1-4adf-a0c1-bd9eb8528a91" />
+
+
+<img width="1302" height="964" alt="image" src="https://github.com/user-attachments/assets/c44a0849-7d0d-4d02-8d66-5958cfba473a" />
+
