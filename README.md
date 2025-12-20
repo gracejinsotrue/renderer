@@ -4,6 +4,10 @@ Supports multiple 3D objects via scene graph hierarchy. Cool camera too.
 
 Definitely a work-in-progress passion project. Currently adding CUDA acceleration, trying to optimize performance for larger models (e.g. with backface culling or some shadow map caching for my potato computer (the former actually sped it up from like 10FPS to 30FPS so reallll))
 
+Ray Tracing example of the food scene from kpop demon hunters
+![alt text](src/rendered.png)
+
+Engine screenshot
 
 <img width="680" height="798" alt="image" src="https://github.com/user-attachments/assets/a10605f2-7ac6-47f9-b6be-587a96ff11ae" />
 <img width="1067" height="1006" alt="image" src="https://github.com/user-attachments/assets/50536bc3-e591-4c8a-8e58-9c664d20c707" />
