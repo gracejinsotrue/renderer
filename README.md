@@ -4,7 +4,8 @@ Supports multiple 3D objects via scene graph hierarchy. Cool camera too.
 
 Definitely a work-in-progress passion project. Currently adding CUDA acceleration, trying to optimize performance for larger models (e.g. with backface culling or some shadow map caching for my potato computer (the former actually sped it up from like 10FPS to 30FPS so reallll))
 
-GOTO:
+GO TO: 
+
 [some interesting rendered images](#IMAGES)
 
 
@@ -60,4 +61,4 @@ Bro the way I learned Blender from scratch for this too:
 # FEATURES
 interesting technical stuff: 
 1) generic computer graphics scene graph hierarchy: https://en.wikipedia.org/wiki/Scene_graph 
-2) Nsight profiling with a really easy script: [nsys_easy](src\nsys_easy)
+2) For the GPU acceleration aspect of my project, I used Nsight profiling. There exists Nsight profiling with a really easy script: [nsys_easy](src\nsys_easy) that I used sometimes. 
