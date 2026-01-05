@@ -2,7 +2,7 @@ Real-time 3D graphics rendering engine from scratch except the part where i use 
 
 Supports multiple 3D objects via scene graph hierarchy. Cool camera too. 
 
-Definitely a work-in-progress passion project. Currently adding CUDA acceleration, trying to optimize performance for larger models (e.g. with backface culling or some shadow map caching for my potato computer (the former actually sped it up from like 10FPS to 30FPS so reallll))
+Definitely a work-in-progress passion project meant to teach myself computer graphics  and the heavy math behind it from the ground up (therefore everything is algorithmic), rather than trying to make this production-ready. Currently adding CUDA acceleration, trying to optimize performance for larger models (e.g. with backface culling or some shadow map caching for my potato computer (the former actually sped it up from like 10FPS to 30FPS so reallll))
 
 GO TO: 
 
@@ -48,7 +48,7 @@ https://github.com/user-attachments/assets/7ff0dcd0-e98a-43ae-a273-07f3e8cb663c
 
 
 
-"oh, that's gore of my comfort character"
+"that's gore of my comfort character"
 e.g. funny bugs
 
 <img width="526" height="671" alt="image" src="https://github.com/user-attachments/assets/5b98dee0-e594-49f9-8092-00799caf3961" />
