@@ -12,6 +12,9 @@ GO TO:
 [technical features](#FEATURES)
 
 
+
+
+
 # IMAGES
 
 Ray Tracing example of the food scene from kpop demon hunters
@@ -19,7 +22,8 @@ Ray Tracing example of the food scene from kpop demon hunters
 
 All the models are made by hand, here is how I did the modelling. 
 
-[video](assets/blender1.mp4)
+https://github.com/user-attachments/assets/91802893-dd5c-45fb-9a43-e0ee252d52d3
+
 
 Engine screenshot
 
