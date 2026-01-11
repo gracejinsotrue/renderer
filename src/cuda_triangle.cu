@@ -27,7 +27,6 @@ struct CudaVec4 {
     __device__ __host__ CudaVec4(float x_, float y_, float z_, float w_) : x(x_), y(y_), z(z_), w(w_) {}
 };
 
-// simple color structure
 struct CudaColor {
     unsigned char r, g, b;
     
@@ -36,7 +35,7 @@ struct CudaColor {
         : r(r_), g(g_), b(b_) {}
 };
 
-// GPU barycentric calculation - returns simple struct
+// GPU barycentric calculation, this returns simple struct
 __device__ 
 CudaVec3 cuda_barycentric(float ax, float ay, float bx, float by, 
                          float cx, float cy, float px, float py) {
@@ -50,7 +49,7 @@ CudaVec3 cuda_barycentric(float ax, float ay, float bx, float by,
     float cross_z = s0x * s1y - s0y * s1x;
     
     if (fabsf(cross_z) < 1e-6f) {
-        return CudaVec3(-1, 1, 1);  // Degenerate triangle
+        return CudaVec3(-1, 1, 1);  
     }
     
     float u = (s1y * s2x - s1x * s2y) / cross_z;
@@ -85,19 +84,17 @@ void triangle_raster_kernel(CudaVec4* vertices,
     float v2y = vertices[2].y / vertices[2].w;
     float v2z = vertices[2].z;
     
-    // Barycentric coordinates
     CudaVec3 bary = cuda_barycentric(v0x, v0y, v1x, v1y, v2x, v2y, (float)x, (float)y);
     
     if (bary.x < 0 || bary.y < 0 || bary.z < 0) return;
     
-    // Depth interpolation
+    // this is for the depth interpolation
     float z = v0z * bary.x + v1z * bary.y + v2z * bary.z;
     float w = vertices[0].w * bary.x + vertices[1].w * bary.y + vertices[2].w * bary.z;
     float depth = z / w;
     
     int idx = y * width + x;
-    
-    // Simple depth test
+
     if (depth > zbuffer[idx]) return;
     
     zbuffer[idx] = depth;
