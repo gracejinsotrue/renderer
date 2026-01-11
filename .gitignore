@@ -6,3 +6,7 @@
 *.dll
 *.mtl
 *.jpg
+*.o
+unified_engine
+*.a
+
