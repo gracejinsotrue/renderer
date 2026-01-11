@@ -12,7 +12,7 @@
 #include "tgaimage.h"
 #include "shaders.h"
 #include "ray_tracer_integration.h"
-#include "realtime_raytracer.h"
+#include "raytracing.h"
 
 extern "C"
 {

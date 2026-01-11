@@ -4,6 +4,7 @@
 #include "unified_math.h"
 #include "Scene.h"
 #include "model.h"
+#include "bvh.h"
 #include <vector>
 #include <memory>
 #include <fstream>
@@ -91,7 +92,7 @@ public:
         double a = dot(edge1, h);
 
         if (a > -EPSILON && a < EPSILON)
-            return false; // Ray is parallel to triangle
+            return false; 
 
         double f = 1.0 / a;
         rt_vec3 s = r.origin() - v0;
@@ -186,6 +187,33 @@ public:
 
         return hit_anything;
     }
+
+    // Build a BVH from the objects in this list
+    std::shared_ptr<class rt_bvh> build_bvh();
+};
+
+// =============================================================================
+// BVH
+// =============================================================================
+
+class rt_bvh : public rt_hittable
+{
+public:
+    std::shared_ptr<rt_bvh_node> root;
+
+    rt_bvh(std::vector<std::shared_ptr<rt_hittable>> &objects);
+
+    bool hit(const rt_ray &r, double t_min, double t_max, rt_hit_record &rec) const override;
+
+private:
+    std::shared_ptr<rt_bvh_node> build_tree(
+        std::vector<std::shared_ptr<rt_hittable>> &objects,
+        int start, int end);
+
+    bool hit_node(std::shared_ptr<rt_bvh_node> node, const rt_ray &r,
+                  double t_min, double t_max, rt_hit_record &rec) const;
+
+    static rt_aabb compute_bounds(std::shared_ptr<rt_hittable> object);
 };
 
 // =============================================================================
@@ -433,6 +461,10 @@ public:
         // convert scene to ray tracer format
         rt_hittable_list world = SceneToRayTracer::convert_scene(scene);
 
+        // Build BVH from world objects
+        std::cout << "Building BVH acceleration structure..." << std::endl;
+        auto bvh_world = world.build_bvh();
+
         // QUALITY SETTINGS
         rt_camera cam;
         cam.aspect_ratio = 1.0;
@@ -454,7 +486,7 @@ public:
         std::cout << "  camera position: (" << cam.lookfrom.x() << ", " << cam.lookfrom.y() << ", " << cam.lookfrom.z() << ")" << std::endl;
 
         // writing to ppm file (need to remove)
-        cam.render_to_file(world, "raytraced_output.ppm");
+        cam.render_to_file(*bvh_world, "raytraced_output.ppm");
 
         std::cout << "=== RAY TRACE COMPLETE ===" << std::endl;
         std::cout << "Output saved to: raytraced_output.ppm" << std::endl;
