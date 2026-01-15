@@ -14,17 +14,6 @@ GO TO:
 
 
 
-
-# IMAGES
-
-Ray Tracing example of the food scene from kpop demon hunters
-![alt text](src/rendered.png)
-
-All the models are made by hand, here is how I did the modelling. 
-
-https://github.com/user-attachments/assets/91802893-dd5c-45fb-9a43-e0ee252d52d3
-
-
 Engine screenshot
 
 <img width="680" height="798" alt="image" src="https://github.com/user-attachments/assets/a10605f2-7ac6-47f9-b6be-587a96ff11ae" />
