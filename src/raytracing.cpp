@@ -271,11 +271,23 @@ void RealtimeRayTracer::update_scene(Scene &scene)
 
     rt_cam.aspect_ratio = float(rt_width) / float(rt_height);
     rt_cam.image_width = rt_width;
-    rt_cam.vfov = 45;
 
     rt_cam.lookfrom = raster_to_point(scene.camera.position);
     rt_cam.lookat = raster_to_point(scene.camera.target);
     rt_cam.vup = raster_to_rt(scene.camera.up);
+    // The traced image composites over the rasterized frame, so it has to
+    // cover exactly the same view volume. The rasterizer puts one world unit
+    // at the target plane across (renderHeight * 3/8) pixels: Engine uses a
+    // viewport three quarters the size of the frame, and Projection is the
+    // identity at the target plane, so ndc y = 1 lands one world unit up.
+    // The tracer covers the whole frame, which is (renderHeight / 2) pixels
+    // from the centre, hence 4/3 world units. A hardcoded vfov cannot track
+    // that and leaves the two images at different scales, which shows up as
+    // a bright fringe wherever the silhouettes disagree.
+    const double RASTER_HALF_EXTENT = 4.0 / 3.0;
+    double cam_dist = (rt_cam.lookfrom - rt_cam.lookat).length();
+    if (cam_dist > 1e-6)
+        rt_cam.vfov = 2.0 * std::atan(RASTER_HALF_EXTENT / cam_dist) * 180.0 / 3.14159265358979323846;
 }
 
 // Pulls the triangles back out of the converted scene. Going through

@@ -292,8 +292,11 @@ void tiled_raster_kernel(const CudaTriangle* triangles,
             float nzi = tri.nz[0]*pw0 + tri.nz[1]*pw1 + tri.nz[2]*pw2;
             float nlen = sqrtf(nxi*nxi + nyi*nyi + nzi*nzi);
             if (nlen > 1e-12f) { nxi /= nlen; nyi /= nlen; nzi /= nlen; }
-            // everything here survived backface culling, so orient toward camera
-            if (nzi < 0.0f) { nxi = -nxi; nyi = -nyi; nzi = -nzi; }
+            // NOT reoriented toward the camera. an interpolated normal near a
+            // silhouette legitimately points away, and forcing nz >= 0 flips
+            // the sign of n.l discontinuously wherever nz crosses zero, which
+            // shows up as hard-edged bands across a curved surface. the CPU
+            // shader does not do it either; max(0, n.l) below handles it.
 
             float uu = tri.u[0]*pw0 + tri.u[1]*pw1 + tri.u[2]*pw2;
             float vv = tri.vt[0]*pw0 + tri.vt[1]*pw1 + tri.vt[2]*pw2;
@@ -312,10 +315,11 @@ void tiled_raster_kernel(const CudaTriangle* triangles,
                 float ez = mat.mit[6]*ox + mat.mit[7]*oy + mat.mit[8]*oz;
                 float ml = sqrtf(ex*ex + ey*ey + ez*ez);
                 if (ml > 1e-12f) {
+                    // used as-is, matching ShadowMappingShader::fragment. MIT
+                    // is built from ModelView alone, which is affine, so there
+                    // is no perspective term to correct for, and a world-space
+                    // normal map routinely produces normals facing away.
                     nxi = ex/ml; nyi = ey/ml; nzi = ez/ml;
-                    // the mapped normal must still face the viewer; MIT carries
-                    // a perspective term that can flip its sense
-                    if (nzi < 0.0f) { nxi = -nxi; nyi = -nyi; nzi = -nzi; }
                 }
             }
 

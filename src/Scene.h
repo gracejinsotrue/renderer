@@ -15,12 +15,27 @@ public:
     Vec3f position;
     Vec3f target;
     Vec3f up;
+    // No longer drives the projection; projectionCoeff() derives that from
+    // the camera distance instead. Kept because it is part of the public
+    // camera state and callers may still set it.
     float fov;
 
     // Camera(Vec3f pos = Vec3f(0, 0, 3), Vec3f tgt = Vec3f(0, 0, 0), Vec3f u = Vec3f(0, 1, 0))
     //     : position(pos), target(tgt), up(u), fov(-1.0f) {}
     Camera(Vec3f pos = Vec3f(0, 0, 3), Vec3f tgt = Vec3f(0, 0, 0), Vec3f u = Vec3f(0, 1, 0))
         : position(pos), target(tgt), up(u), fov(-0.8f) {}
+
+    // tinyrenderer's weak-perspective coefficient. It must be -1/distance for
+    // the projection to behave like a pinhole camera standing where this one
+    // actually stands. `fov` used to supply it as a fixed -0.8, which
+    // describes a camera 1.25 units from the target no matter where the real
+    // one is, and left the rasterized and ray traced images with different
+    // perspective strengths.
+    float projectionCoeff() const
+    {
+        float d = (position - target).norm();
+        return d > 1e-6f ? -1.0f / d : -1.0f;
+    }
 
     void rotate(float yaw, float pitch);
     void move(Vec3f direction, float speed);

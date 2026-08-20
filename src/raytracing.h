@@ -141,6 +141,9 @@ public:
 
     int get_accumulated_samples() const { return accumulated_samples; }
 
+    // vertical field of view in degrees, derived from the raster viewport
+    double get_rt_vfov() const { return rt_cam.vfov; }
+
     void toggle_cuda();
     bool is_cuda_enabled() const { return cuda_available && use_cuda; }
     bool is_cuda_available() const { return cuda_available; }

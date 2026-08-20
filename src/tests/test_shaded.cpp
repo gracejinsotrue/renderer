@@ -122,13 +122,19 @@ int main(int argc,char**argv){
         bool fragment(Vec3f screen_bar, Vec3f persp_bar, TGAColor &c){
             (void)screen_bar;
             Vec3f nn = n[0]*persp_bar.x + n[1]*persp_bar.y + n[2]*persp_bar.z;
+            // Normals are used as they come out of MIT. Do NOT reorient them
+            // toward the camera: near a silhouette an interpolated or mapped
+            // normal legitimately points away, and forcing z >= 0 flips the
+            // sign of n.l discontinuously. This reference checks the kernel
+            // against ShadowMappingShader::fragment, which does not reorient,
+            // so neither does this. An earlier version did, which made the
+            // test agree with a kernel bug instead of catching it.
             Vec3f e = proj<3>(mit*embed<4>(nn, 0.f));
             if (e.norm()>1e-12f) e = e.normalize();
-            if (e.z<0.f) e = e*-1.f;
             Vec2f uv = uvc[0]*persp_bar.x + uvc[1]*persp_bar.y + uvc[2]*persp_bar.z;
             Vec3f on = mm->normal(uv);
             Vec3f en = proj<3>(mit*embed<4>(on, 0.f));
-            if (en.norm()>1e-12f) { en = en.normalize(); if (en.z<0.f) en = en*-1.f; e = en; }
+            if (en.norm()>1e-12f) { en = en.normalize(); e = en; }
             float diff = std::max(0.f, e*L);
             float rz = e.z*(2.f*(e*L)) - L.z;
             float spec = 0.f;

@@ -324,6 +324,7 @@ public:
     // cycles the selected object's ray tracer surface: diffuse, metal, glass
     void cycleRayTracerMaterial();
     bool isCudaAvailable() const { return cuda_available; }
+    bool isCudaRenderingEnabled() const { return use_cuda_rendering; }
 };
 
 #endif // __ENGINE_H__

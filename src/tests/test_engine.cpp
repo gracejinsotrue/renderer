@@ -76,6 +76,14 @@ static FrameStat renderAndStat(Engine &e, const char *save = NULL)
     return statOf(tmp);
 }
 
+// Puts the engine on the requested path regardless of what the default is,
+// so these tests do not silently invert when that default changes.
+static void setCudaPath(Engine &engine, bool want)
+{
+    if (engine.isCudaAvailable() && engine.isCudaRenderingEnabled() != want)
+        engine.toggleCudaRendering();
+}
+
 int main(int argc, char **argv)
 {
     const char *path = (argc > 1) ? argv[1] : "../obj/african_head.obj";
@@ -111,7 +119,10 @@ int main(int argc, char **argv)
     if (b) b->localTransform.position = Vec3f(1.2f, 0.f, 0.f);
     check(a && b, "two mesh nodes in the scene");
 
-    engine.toggleCudaRendering(); // starts disabled
+    // Set the path explicitly. This used to be a bare toggle with a comment
+    // saying the engine starts disabled; when the default flipped, every
+    // "CUDA path" section below silently ran on the CPU instead.
+    setCudaPath(engine, true);
     printf("\n--- CUDA path renders\n");
 
     FrameStat f1 = renderAndStat(engine, "/tmp/eng_cuda.tga");
@@ -431,7 +442,7 @@ int main(int argc, char **argv)
     }
 
     printf("\n--- CPU path still works\n");
-    engine.toggleCudaRendering();
+    setCudaPath(engine, false);
     FrameStat f9 = renderAndStat(engine, "/tmp/eng_cpu.tga");
     printf("  lit pixels: %lld\n", f9.lit);
     check(f9.lit > 2000, "CPU path still produces a non-blank frame");
