@@ -17,7 +17,11 @@ class rt_material
 {
 public:
     virtual ~rt_material() = default;
+    // front_face is true when the ray hit the outside of the surface. normal
+    // is already oriented against the ray, so it cannot convey this on its own,
+    // and a dielectric needs it to pick the refraction ratio.
     virtual bool scatter(const rt_ray &r_in, const rt_vec3 &hit_point, const rt_vec3 &normal,
+                         bool front_face,
                          rt_color &attenuation, rt_ray &scattered) const = 0;
 };
 
@@ -29,8 +33,11 @@ public:
     rt_lambertian(const rt_color &a) : albedo(a) {}
 
     bool scatter(const rt_ray &r_in, const rt_vec3 &hit_point, const rt_vec3 &normal,
+                 bool front_face,
                  rt_color &attenuation, rt_ray &scattered) const override
     {
+        (void)r_in;
+        (void)front_face;
         rt_vec3 scatter_direction = normal + random_unit_vector();
 
         if (scatter_direction.near_zero())
@@ -39,6 +46,68 @@ public:
         scattered = rt_ray(hit_point, scatter_direction);
         attenuation = albedo;
         return true;
+    }
+};
+
+// Mirror reflection, roughened by fuzz. fuzz 0 is a perfect mirror.
+class rt_metal : public rt_material
+{
+public:
+    rt_color albedo;
+    double fuzz;
+
+    rt_metal(const rt_color &a, double f) : albedo(a), fuzz(f < 1 ? f : 1) {}
+
+    bool scatter(const rt_ray &r_in, const rt_vec3 &hit_point, const rt_vec3 &normal,
+                 bool front_face,
+                 rt_color &attenuation, rt_ray &scattered) const override
+    {
+        (void)front_face;
+        rt_vec3 reflected = unit_vector(reflect(r_in.direction(), normal));
+        reflected = reflected + fuzz * random_unit_vector();
+        scattered = rt_ray(hit_point, reflected);
+        attenuation = albedo;
+        // a fuzzed ray can end up below the surface; absorb it
+        return dot(scattered.direction(), normal) > 0;
+    }
+};
+
+// Glass. Refracts when it can and reflects when it cannot, with Schlick's
+// approximation for the angle-dependent reflectance.
+class rt_dielectric : public rt_material
+{
+public:
+    double refraction_index;
+
+    rt_dielectric(double ri) : refraction_index(ri) {}
+
+    bool scatter(const rt_ray &r_in, const rt_vec3 &hit_point, const rt_vec3 &normal,
+                 bool front_face,
+                 rt_color &attenuation, rt_ray &scattered) const override
+    {
+        attenuation = rt_color(1.0, 1.0, 1.0);
+        double ri = front_face ? (1.0 / refraction_index) : refraction_index;
+
+        rt_vec3 unit_dir = unit_vector(r_in.direction());
+        double cos_theta = std::min(dot(-unit_dir, normal), 1.0);
+        double sin_theta = std::sqrt(1.0 - cos_theta * cos_theta);
+
+        rt_vec3 direction;
+        if (ri * sin_theta > 1.0 || reflectance(cos_theta, ri) > random_double())
+            direction = reflect(unit_dir, normal);
+        else
+            direction = refract(unit_dir, normal, ri);
+
+        scattered = rt_ray(hit_point, direction);
+        return true;
+    }
+
+private:
+    static double reflectance(double cosine, double ri)
+    {
+        double r0 = (1 - ri) / (1 + ri);
+        r0 = r0 * r0;
+        return r0 + (1 - r0) * std::pow((1 - cosine), 5);
     }
 };
 
@@ -320,7 +389,7 @@ private:
         {
             rt_ray scattered;
             rt_color attenuation;
-            if (rec.mat->scatter(r, rec.p, rec.normal, attenuation, scattered))
+            if (rec.mat->scatter(r, rec.p, rec.normal, rec.front_face, attenuation, scattered))
                 return attenuation * ray_color(scattered, depth - 1, world);
             return rt_color(0, 0, 0);
         }
@@ -397,8 +466,21 @@ private:
         // get world transform matrix
         Matrix world_transform = node->getWorldMatrix();
 
-        // create a simple lambertian material (we'll improve this later)
-        auto material = std::make_shared<rt_lambertian>(rt_color(0.7, 0.3, 0.3));
+        // colour comes from the model's own diffuse map, so a scene with
+        // several objects no longer renders as identical blobs
+        std::shared_ptr<rt_material> material;
+        switch (node->rtSurface)
+        {
+        case SceneNode::RT_METAL:
+            material = std::make_shared<rt_metal>(model_albedo(model), node->rtFuzz);
+            break;
+        case SceneNode::RT_GLASS:
+            material = std::make_shared<rt_dielectric>(node->rtIOR);
+            break;
+        default:
+            material = std::make_shared<rt_lambertian>(model_albedo(model));
+            break;
+        }
 
         // Convert each face to a triangle
         for (int i = 0; i < model->nfaces(); i++)
@@ -424,6 +506,48 @@ private:
         }
 
         std::cout << "  Converted " << node->name << " (" << model->nfaces() << " triangles)" << std::endl;
+    }
+
+    // Average colour of a model's diffuse map, as a stand-in for texturing
+    // the traced surface. Sampled on a fixed grid so the cost does not depend
+    // on texture size, and cached because this runs on every scene change.
+    static rt_color model_albedo(Model *model)
+    {
+        static std::map<Model *, rt_color> cache;
+        std::map<Model *, rt_color>::iterator it = cache.find(model);
+        if (it != cache.end())
+            return it->second;
+
+        rt_color result(0.7, 0.3, 0.3);   // previous hardcoded default
+        TGAImage &d = model->diffuseMap();
+        int w = d.get_width(), h = d.get_height();
+        if (w > 0 && h > 0 && d.buffer())
+        {
+            const int STEPS = 64;
+            double r = 0, g = 0, b = 0;
+            int n = 0;
+            for (int sy = 0; sy < STEPS; sy++)
+                for (int sx = 0; sx < STEPS; sx++)
+                {
+                    TGAColor c = d.get((sx * w) / STEPS, (sy * h) / STEPS);
+                    // TGAColor is B,G,R
+                    b += c[0]; g += c[1]; r += c[2];
+                    n++;
+                }
+            if (n > 0)
+            {
+                // Lift the average towards mid grey. Diffuse maps here are
+                // dark (african_head averages 67/255) and a path tracer
+                // multiplies albedo once per bounce, so using the raw average
+                // makes everything nearly black after two bounces.
+                double s = 1.0 / (255.0 * n);
+                result = rt_color(std::min(1.0, r * s * 1.6),
+                                  std::min(1.0, g * s * 1.6),
+                                  std::min(1.0, b * s * 1.6));
+            }
+        }
+        cache[model] = result;
+        return result;
     }
 
     static Vec3f transform_point(const Matrix &transform, const Vec3f &point)

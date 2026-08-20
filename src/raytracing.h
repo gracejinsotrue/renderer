@@ -5,10 +5,13 @@
 #include "Scene.h"
 #include "tgaimage.h"
 #include "ray_tracer_integration.h" 
-#include <iomanip>                  
+#include <iomanip>
 #include <chrono>
+#include <vector>
 
-// TODO: kind of a big WIP
+// Progressive ray tracer that runs alongside the rasterizer and blends
+// over its frame. Traces on the GPU when CUDA is available, otherwise a
+// tile at a time on the CPU so the editor stays responsive.
 class RealtimeRayTracer
 {
 private:
@@ -28,8 +31,29 @@ private:
 
     rt_camera rt_cam;
 
-    int frames_since_camera_move; 
-    Vec3f last_camera_position;  
+    int frames_since_camera_move;
+    Vec3f last_camera_position;
+    Vec3f last_camera_target;
+
+    // Cheap fingerprint of everything the traced scene depends on: which
+    // meshes exist, where they sit, and what their geometry version is.
+    // Comparing it every frame catches sculpting, blend shapes, node moves
+    // and add/delete without having to find every mutation site by hand.
+    unsigned long long scene_signature;
+    unsigned long long compute_scene_signature(Scene &scene) const;
+
+    // A rebuild is convert + BVH build + upload, all on the CPU, and on a
+    // heavy model that is seconds rather than milliseconds. Sculpting fires a
+    // change every frame, so rebuilding immediately would freeze the editor
+    // solid. Instead the rebuild waits until the scene has been still for a
+    // moment, which is what a progressive renderer does anyway.
+    bool rebuild_pending;
+    std::chrono::high_resolution_clock::time_point last_scene_change;
+    static const int REBUILD_DELAY_MS = 200;
+
+    // samples per pixel accumulated into the current image
+    int accumulated_samples;
+    void restart_accumulation();
 
     int quality_level;
     float blend_strength;      
@@ -42,6 +66,18 @@ private:
     int performance_samples;  
 
     bool show_tile_boundaries;
+
+    // CUDA path tracer. When the device is available the whole frame is traced
+    // in one kernel launch, so the tile-at-a-time scheme the CPU needs is
+    // bypassed entirely. cuda_scene_tris is 0 until a scene has been uploaded.
+    bool cuda_available;
+    bool use_cuda;
+    bool gpu_composite;
+    int cuda_scene_tris;
+    std::vector<unsigned char> cuda_readback;
+
+    bool upload_scene_to_gpu();
+    bool render_frame_gpu(bool readback);
 
     // Private methods
     void update_quality_settings();
@@ -84,6 +120,30 @@ public:
     void print_detailed_status() const;
 
     void print_status() const;
+
+    // Traces and composites entirely on the device, leaving the finished
+    // frame in the rasterizer's own framebuffer. Returns false if the GPU
+    // path is unavailable, in which case the caller must fall back to
+    // render_one_tile() plus blend_with_framebuffer().
+    bool render_and_blend_on_gpu();
+
+    // Compositing on the device keeps the frame there. Turning this off falls
+    // back to pulling both images down and blending on the host, which is the
+    // only route when something else needs the frame in host memory anyway.
+    void set_gpu_composite(bool on) { gpu_composite = on; }
+    bool uses_gpu_composite() const { return gpu_composite; }
+
+    // the traced image before compositing, for tests and for the host blend
+    const TGAImage &get_rt_framebuffer() const { return rt_framebuffer; }
+    int get_rt_width() const { return rt_width; }
+    int get_rt_height() const { return rt_height; }
+    float get_blend_strength() const { return blend_strength; }
+
+    int get_accumulated_samples() const { return accumulated_samples; }
+
+    void toggle_cuda();
+    bool is_cuda_enabled() const { return cuda_available && use_cuda; }
+    bool is_cuda_available() const { return cuda_available; }
 };
 
 #endif // RAYTRACING_H

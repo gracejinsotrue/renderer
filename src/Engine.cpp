@@ -103,6 +103,7 @@ bool Engine::init()
     std::cout << "  Arrow keys - Move light source" << std::endl;
     std::cout << "  F - Toggle wireframe mode" << std::endl;
     std::cout << "  T - Toggle stats display" << std::endl;
+    std::cout << "  0 - Cycle ray tracer surface (diffuse/metal/glass)" << std::endl;
     std::cout << "  P - Capture frame (output.tga)" << std::endl;
     std::cout << "  B - Load background image" << std::endl;
     std::cout << "  C - Clear background" << std::endl;
@@ -596,6 +597,9 @@ void Engine::handleEvents()
 
             case SDLK_t:
                 showStats = !showStats;
+                break;
+            case SDLK_0:
+                cycleRayTracerMaterial();
                 break;
             case SDLK_p:
                 captureFrame("output.tga");
@@ -1255,24 +1259,34 @@ void Engine::render()
     // then render 3D scene (but don't clear framebuffer in renderScene)
     renderScene();
 
+    // When both the rasterizer and the ray tracer are on the device, the trace
+    // and the composite both happen there and the frame never comes down. Only
+    // the vertex overlay still needs a host copy.
+    bool rtOnGPU = false;
+    if (frameOnGPU && realtimeRT && realtimeRT->is_enabled() &&
+        !(vertexEditMode && vertexEditor.hasTarget()))
+    {
+        rtOnGPU = realtimeRT->render_and_blend_on_gpu();
+    }
+
     // the overlays below composite into the host framebuffer, so if the frame is
     // still sitting in device memory it has to come down first
     bool needsHostFrame = (vertexEditMode && vertexEditor.hasTarget()) ||
-                          (realtimeRT && realtimeRT->is_enabled());
+                          (realtimeRT && realtimeRT->is_enabled() && !rtOnGPU);
     if (frameOnGPU && needsHostFrame)
     {
         cudaCopyResults(framebuffer);
         frameOnGPU = false;
     }
 
-    // NEW: Add vertex editor overlay
+    // vertex editor overlay
     if (vertexEditMode && vertexEditor.hasTarget())
     {
         vertexEditor.renderVertexOverlay(framebuffer, renderWidth, renderHeight);
     }
 
-    // NEW: Add real-time ray tracing if enabled
-    if (realtimeRT && realtimeRT->is_enabled())
+    // host fallback: trace a tile and blend on the CPU
+    if (realtimeRT && realtimeRT->is_enabled() && !rtOnGPU)
     {
         // Ray trace one tile this frame
         realtimeRT->render_one_tile();
@@ -1938,6 +1952,32 @@ int Engine::getCudaMesh(Model *model)
     std::cout << "CUDA mesh uploaded: " << nverts << " verts, "
               << nfaces << " faces (handle " << handle << ")" << std::endl;
     return handle;
+}
+
+// The rasterizer ignores this; it only changes how the ray tracer shades the
+// object. Marking the tracer dirty rebuilds its scene and restarts the
+// accumulated image, since the old samples used the previous surface.
+void Engine::cycleRayTracerMaterial()
+{
+    SceneNode *selected = scene.getSelectedNode();
+    if (!selected || !selected->hasModel())
+    {
+        std::cout << "Select an object first" << std::endl;
+        return;
+    }
+
+    switch (selected->rtSurface)
+    {
+    case SceneNode::RT_DIFFUSE: selected->rtSurface = SceneNode::RT_METAL; break;
+    case SceneNode::RT_METAL:   selected->rtSurface = SceneNode::RT_GLASS; break;
+    default:                    selected->rtSurface = SceneNode::RT_DIFFUSE; break;
+    }
+
+    std::cout << "Ray tracer surface for " << selected->name << ": "
+              << selected->rtSurfaceName() << std::endl;
+
+    if (realtimeRT)
+        realtimeRT->mark_scene_dirty();
 }
 
 void Engine::toggleCudaRendering()

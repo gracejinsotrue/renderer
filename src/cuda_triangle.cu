@@ -917,6 +917,14 @@ public:
     // already wrote it top-down in R,G,B, so no conversion is needed and one
     // 2D memcpy replaces ~2M per-pixel host operations a frame.
     // dst_pitch is SDL's row stride, which may be wider than width * 3.
+    unsigned char* deviceFramebuffer(int* w, int* h) {
+        if (w) *w = width;
+        if (h) *h = height;
+        if (!initialized) return NULL;
+        flush();
+        return d_framebuffer;
+    }
+
     void blitToTexture(void* dst, int dst_pitch) {
         if (!initialized || !dst) return;
 
@@ -1193,6 +1201,19 @@ extern "C" {
             g_cuda_rasterizer->getStats(submitted, culled_back, culled_offscreen,
                                         bin_overflow);
         }
+    }
+
+    // The finished frame, still on the device. Pending kernels are flushed
+    // first so anything that composites into it lands on top of a complete
+    // raster frame. Both modules launch on the default stream, so a kernel
+    // queued after this call is ordered after the raster work.
+    unsigned char* cudaGetDeviceFramebuffer(int* w, int* h) {
+        if (!g_cuda_rasterizer) {
+            if (w) *w = 0;
+            if (h) *h = 0;
+            return NULL;
+        }
+        return g_cuda_rasterizer->deviceFramebuffer(w, h);
     }
 
     void cudaBlitToTexture(void* dst, int dst_pitch) {

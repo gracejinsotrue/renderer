@@ -7,6 +7,7 @@
 *.mtl
 *.jpg
 *.o
+*.d
 unified_engine
 *.a
 
@@ -21,6 +22,8 @@ src/tests/bin/
 src/tests/bench.cpp
 src/tests/bench_cull.cpp
 src/tests/bench_tile.cpp
+src/tests/bench_rt.cpp
+src/tests/bench_frame.cpp
 src/tests/profile_frame.cpp
 src/tests/render_png.cpp
 src/tests/test_wind.cpp

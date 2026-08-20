@@ -314,8 +314,15 @@ public:
         float fps = 1.0f / deltaTime;
         return std::min(fps, 60.0f);
     }
+    // lets tests drive the ray tracer directly; the engine only ever
+    // toggles it and steps it once per frame
+    RealtimeRayTracer *getRayTracer() { return realtimeRT.get(); }
+
     // for cuda
     void toggleCudaRendering();
+
+    // cycles the selected object's ray tracer surface: diffuse, metal, glass
+    void cycleRayTracerMaterial();
     bool isCudaAvailable() const { return cuda_available; }
 };
 

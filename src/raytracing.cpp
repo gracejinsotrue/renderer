@@ -1,6 +1,28 @@
 #include "raytracing.h"
 #include <algorithm>
 #include <cmath>
+#include <vector>
+#include <cstring>
+#include <map>
+
+extern "C" {
+    bool initCudaRayTracer(int width, int height);
+    void cleanupCudaRayTracer();
+    bool cudaRTSetScene(const float *verts, const int *tri_mat, int ntri,
+                        const float *albedos, int nmat);
+    void cudaRTSetCamera(const float *origin3, const float *pixel00_3,
+                         const float *du3, const float *dv3);
+    void cudaRTSetSky(const float *lo3, const float *hi3);
+    void cudaRTRender(int spp, int max_depth, int mode, unsigned int seed);
+    void cudaRTGetResults(unsigned char *host_rgb);
+    void cudaRTResetAccumulation();
+    bool cudaRTSetSceneWithMaterials(const float *verts, const int *tri_mat, int ntri,
+                                     const float *albedos, int nmat,
+                                     const int *types, const float *fuzz,
+                                     const float *iors);
+    void cudaRTBlendToFramebuffer(unsigned char *dst, int dst_w, int dst_h, float blend);
+    unsigned char *cudaGetDeviceFramebuffer(int *w, int *h);
+}
 
 // =============================================================================
 // CONSTRUCTOR
@@ -16,13 +38,21 @@ RealtimeRayTracer::RealtimeRayTracer(int render_width, int render_height)
       world_needs_update(true),
       frames_since_camera_move(0),
       last_camera_position(0, 0, 0),
+      last_camera_target(0, 0, 0),
+      scene_signature(0),
+      rebuild_pending(false),
+      accumulated_samples(0),
       quality_level(2),     
       blend_strength(0.7f), 
       show_progress_overlay(true),
       adaptive_quality(false),
       average_frame_time(16.67f),
       performance_samples(0),
-      show_tile_boundaries(false)
+      show_tile_boundaries(false),
+      cuda_available(false),
+      use_cuda(false),
+      gpu_composite(true),
+      cuda_scene_tris(0)
 {
     total_tiles_x = (rt_width + tile_size - 1) / tile_size;
     total_tiles_y = (rt_height + tile_size - 1) / tile_size;
@@ -33,7 +63,11 @@ RealtimeRayTracer::RealtimeRayTracer(int render_width, int render_height)
 
     update_quality_settings();
 
+    cuda_available = initCudaRayTracer(rt_width, rt_height);
+    use_cuda = cuda_available;
+
     std::cout << "Enhanced RealtimeRayTracer initialized:" << std::endl;
+    std::cout << "  CUDA: " << (cuda_available ? "available" : "not available") << std::endl;
     std::cout << "  RT Resolution: " << rt_width << "x" << rt_height << std::endl;
     std::cout << "  Quality level: " << quality_level << "/4" << std::endl;
     std::cout << "  Blend strength: " << (blend_strength * 100) << "%" << std::endl;
@@ -109,31 +143,130 @@ void RealtimeRayTracer::toggle_tile_boundaries()
     std::cout << "Tile boundaries: " << (show_tile_boundaries ? "ON" : "OFF") << std::endl;
 }
 
+// Everything the traced image depends on, folded into one value. Node
+// transforms are included via their world matrix, and geometry edits via
+// Model::geometryVersion(), which every method that writes vertices bumps.
+unsigned long long RealtimeRayTracer::compute_scene_signature(Scene &scene) const
+{
+    std::vector<SceneNode *> nodes;
+    scene.getAllMeshNodes(nodes);
+
+    unsigned long long h = 1469598103934665603ULL;
+    auto mix = [&h](unsigned long long v)
+    {
+        h ^= v;
+        h *= 1099511628211ULL;
+    };
+
+    mix((unsigned long long)nodes.size());
+    for (size_t i = 0; i < nodes.size(); i++)
+    {
+        SceneNode *n = nodes[i];
+        if (!n || !n->model)
+            continue;
+        mix((unsigned long long)n->model->geometryVersion());
+        mix(n->isVisible() ? 1ULL : 2ULL);
+
+        Matrix m = n->getWorldMatrix();
+        for (int r = 0; r < 4; r++)
+            for (int c = 0; c < 4; c++)
+            {
+                float f = (float)m[r][c];
+                unsigned int bits;
+                memcpy(&bits, &f, sizeof(bits));
+                mix((unsigned long long)bits);
+            }
+    }
+    return h;
+}
+
+// Throws away the samples gathered so far. Anything that changes what the
+// image should look like has to call this, or old samples smear into the new
+// picture.
+void RealtimeRayTracer::restart_accumulation()
+{
+    accumulated_samples = 0;
+    frames_since_camera_move = 0;
+    if (cuda_available)
+        cudaRTResetAccumulation();
+}
+
 void RealtimeRayTracer::update_scene(Scene &scene)
 {
     if (!is_active)
         return;
 
-    // Check if camera moved (reset tiles if so)
+    // Camera moves invalidate the image. Target as well as position: orbiting
+    // can swing the target while the eye barely moves.
     Vec3f current_camera_pos = scene.camera.position;
+    Vec3f current_camera_target = scene.camera.target;
     float camera_move_threshold = 0.01f;
-    if ((current_camera_pos - last_camera_position).norm() > camera_move_threshold)
+    bool camera_moved =
+        (current_camera_pos - last_camera_position).norm() > camera_move_threshold ||
+        (current_camera_target - last_camera_target).norm() > camera_move_threshold;
+
+    if (camera_moved)
     {
         reset_tiles();
         last_camera_position = current_camera_pos;
-        frames_since_camera_move = 0;
+        last_camera_target = current_camera_target;
+        restart_accumulation();
     }
     else
     {
         frames_since_camera_move++;
     }
 
+    // Sculpting, blend shapes, node moves and add/delete all land here.
+    // Nothing else marked the traced scene dirty, so before this the ray
+    // tracer kept drawing the mesh as it was when it was switched on.
+    unsigned long long sig = compute_scene_signature(scene);
+    if (sig != scene_signature)
+    {
+        scene_signature = sig;
+        rebuild_pending = true;
+        last_scene_change = std::chrono::high_resolution_clock::now();
+        reset_tiles();
+        restart_accumulation();
+    }
+
+    // hold off until the edits stop, so a sculpt stroke does not pay for a
+    // full rebuild on every frame of the drag
+    if (rebuild_pending)
+    {
+        float since = std::chrono::duration<float, std::milli>(
+                          std::chrono::high_resolution_clock::now() - last_scene_change)
+                          .count();
+        if (since >= (float)REBUILD_DELAY_MS)
+        {
+            rebuild_pending = false;
+            world_needs_update = true;
+        }
+    }
+
     if (world_needs_update)
     {
         world = SceneToRayTracer::convert_scene(scene);
-        bvh_world = world.build_bvh();
+        // The CPU BVH is only ever read by the CPU tracer. Building it when
+        // the GPU is doing the tracing is the single most expensive part of a
+        // rebuild and nothing consumes it, so leave it null and build lazily
+        // if the CPU path is ever switched back on.
+        bvh_world.reset();
+        if (cuda_available && use_cuda)
+        {
+            upload_scene_to_gpu();
+        }
+        else
+        {
+            bvh_world = world.build_bvh();
+            if (cuda_available)
+                upload_scene_to_gpu();
+        }
         world_needs_update = false;
-        std::cout << "Ray traced scene updated with BVH" << std::endl;
+        // samples gathered during the debounce window traced the old
+        // geometry, so they cannot be blended with what comes next
+        restart_accumulation();
+        std::cout << "Ray traced scene updated" << std::endl;
     }
 
     rt_cam.aspect_ratio = float(rt_width) / float(rt_height);
@@ -145,12 +278,230 @@ void RealtimeRayTracer::update_scene(Scene &scene)
     rt_cam.vup = raster_to_rt(scene.camera.up);
 }
 
+// Pulls the triangles back out of the converted scene. Going through
+// rt_hittable_list rather than re-walking the scene graph keeps
+// SceneToRayTracer as the single place that applies world transforms.
+bool RealtimeRayTracer::upload_scene_to_gpu()
+{
+    std::vector<float> verts;
+    std::vector<int> tri_mat;
+    std::vector<float> albedos;
+    std::vector<int> mat_types;
+    std::vector<float> mat_fuzz;
+    std::vector<float> mat_ior;
+    std::map<const rt_material *, int> mat_index;
+    verts.reserve(world.objects.size() * 9);
+    tri_mat.reserve(world.objects.size());
+
+    for (size_t i = 0; i < world.objects.size(); i++)
+    {
+        rt_triangle *tri = dynamic_cast<rt_triangle *>(world.objects[i].get());
+        if (!tri)
+            continue;   // spheres and anything else stay CPU-only for now
+        const rt_point3 *v[3] = { &tri->v0, &tri->v1, &tri->v2 };
+        for (int k = 0; k < 3; k++)
+            for (int a = 0; a < 3; a++)
+                verts.push_back((float)(*v[k])[a]);
+
+        // one device material per distinct CPU material, so meshes keep the
+        // colour SceneToRayTracer gave them instead of sharing one albedo
+        const rt_material *mp = tri->mat.get();
+        std::map<const rt_material *, int>::iterator it = mat_index.find(mp);
+        int idx;
+        if (it == mat_index.end())
+        {
+            idx = (int)(albedos.size() / 3);
+            rt_color a(0.7, 0.3, 0.3);
+            int type = 0;
+            float fz = 0.f, ior = 1.5f;
+
+            if (const rt_lambertian *lam = dynamic_cast<const rt_lambertian *>(mp))
+            {
+                a = lam->albedo;
+                type = 0;
+            }
+            else if (const rt_metal *met = dynamic_cast<const rt_metal *>(mp))
+            {
+                a = met->albedo;
+                fz = (float)met->fuzz;
+                type = 1;
+            }
+            else if (const rt_dielectric *die = dynamic_cast<const rt_dielectric *>(mp))
+            {
+                ior = (float)die->refraction_index;
+                type = 2;
+            }
+
+            albedos.push_back((float)a.x());
+            albedos.push_back((float)a.y());
+            albedos.push_back((float)a.z());
+            mat_types.push_back(type);
+            mat_fuzz.push_back(fz);
+            mat_ior.push_back(ior);
+            mat_index[mp] = idx;
+        }
+        else
+        {
+            idx = it->second;
+        }
+        tri_mat.push_back(idx);
+    }
+
+    cuda_scene_tris = (int)(verts.size() / 9);
+    if (cuda_scene_tris == 0)
+        return false;
+    if (albedos.empty())
+    {
+        albedos.push_back(0.7f);
+        albedos.push_back(0.3f);
+        albedos.push_back(0.3f);
+        mat_types.push_back(0);
+        mat_fuzz.push_back(0.f);
+        mat_ior.push_back(1.5f);
+    }
+
+    if (!cudaRTSetSceneWithMaterials(verts.data(), tri_mat.data(), cuda_scene_tris,
+                                     albedos.data(), (int)(albedos.size() / 3),
+                                     mat_types.data(), mat_fuzz.data(), mat_ior.data()))
+    {
+        cuda_scene_tris = 0;
+        return false;
+    }
+
+    // The realtime CPU tracer returns black on a miss and nothing in the scene
+    // emits, so with a black sky every path terminates at black. Use the same
+    // gradient the offline rt_camera does, which is the scene's only light.
+    const float sky_lo[3] = { 0.0f, 0.0f, 0.0f };
+    const float sky_hi[3] = { 0.8f, 0.8f, 0.8f };
+    cudaRTSetSky(sky_lo, sky_hi);
+
+    std::cout << "Ray tracer scene uploaded to GPU: " << cuda_scene_tris
+              << " triangles, " << (albedos.size() / 3) << " materials" << std::endl;
+    return true;
+}
+
+// One kernel launch for the whole frame. At these rates there is nothing to
+// gain from spreading the work across frames the way the CPU path has to.
+bool RealtimeRayTracer::render_frame_gpu(bool readback)
+{
+    if (!cuda_available || cuda_scene_tris == 0)
+        return false;
+
+    rt_point3 center = rt_cam.lookfrom;
+    double theta = degrees_to_radians(rt_cam.vfov);
+    double h = std::tan(theta / 2);
+    double viewport_height = 2 * h;
+    double viewport_width = viewport_height * rt_cam.aspect_ratio;
+
+    rt_vec3 w = unit_vector(rt_cam.lookfrom - rt_cam.lookat);
+    rt_vec3 u = unit_vector(cross(rt_cam.vup, w));
+    rt_vec3 v = cross(w, u);
+
+    rt_vec3 viewport_u = viewport_width * u;
+    rt_vec3 viewport_v = viewport_height * -v;
+    rt_vec3 pixel_delta_u = viewport_u / rt_width;
+    rt_vec3 pixel_delta_v = viewport_v / rt_height;
+    rt_point3 pixel00 = center - w - viewport_u / 2 - viewport_v / 2 +
+                        0.5 * (pixel_delta_u + pixel_delta_v);
+
+    float c_o[3]  = { (float)center.x(), (float)center.y(), (float)center.z() };
+    float c_p[3]  = { (float)pixel00.x(), (float)pixel00.y(), (float)pixel00.z() };
+    float c_du[3] = { (float)pixel_delta_u.x(), (float)pixel_delta_u.y(), (float)pixel_delta_u.z() };
+    float c_dv[3] = { (float)pixel_delta_v.x(), (float)pixel_delta_v.y(), (float)pixel_delta_v.z() };
+    cudaRTSetCamera(c_o, c_p, c_du, c_dv);
+
+    // the seed advances every pass so successive passes add new samples
+    // rather than repeating the ones already accumulated
+    cudaRTRender(rt_cam.samples_per_pixel, rt_cam.max_depth, 0,
+                 1u + (unsigned int)accumulated_samples * 2654435761u);
+    accumulated_samples += rt_cam.samples_per_pixel;
+
+    if (!readback)
+        return true;   // the caller will composite on the device
+
+    cuda_readback.resize((size_t)rt_width * rt_height * 3);
+    cudaRTGetResults(cuda_readback.data());
+
+    for (int y = 0; y < rt_height; y++)
+        for (int x = 0; x < rt_width; x++)
+        {
+            const unsigned char *p = &cuda_readback[((size_t)y * rt_width + x) * 3];
+            rt_framebuffer.set(x, y, TGAColor(p[0], p[1], p[2]));
+        }
+    return true;
+}
+
+// Traces and blends without either image touching the host. The CPU route
+// costs two device-to-host DMAs and a per-pixel pass over the whole frame,
+// which dwarfs the trace itself now that the trace is on the GPU.
+bool RealtimeRayTracer::render_and_blend_on_gpu()
+{
+    if (!is_active || !use_cuda || !cuda_available || cuda_scene_tris == 0)
+        return false;
+    if (!gpu_composite)
+        return false;
+
+    int fw = 0, fh = 0;
+    unsigned char *dev_fb = cudaGetDeviceFramebuffer(&fw, &fh);
+    if (!dev_fb || fw <= 0 || fh <= 0)
+        return false;
+
+    auto start_time = std::chrono::high_resolution_clock::now();
+
+    if (!render_frame_gpu(false))
+        return false;
+
+    float b = blend_strength;
+    if (quality_level == 1)
+        b *= 0.6f;
+    cudaRTBlendToFramebuffer(dev_fb, fw, fh, b);
+
+    // the whole image is done, so there is no tile cursor to advance
+    current_tile_x = 0;
+    current_tile_y = total_tiles_y;
+
+    auto end = std::chrono::high_resolution_clock::now();
+    update_performance_stats(
+        std::chrono::duration<float, std::milli>(end - start_time).count());
+    return true;
+}
+
+void RealtimeRayTracer::toggle_cuda()
+{
+    if (!cuda_available)
+    {
+        std::cout << "Ray tracer CUDA not available" << std::endl;
+        return;
+    }
+    use_cuda = !use_cuda;
+    // the CPU tracer needs a BVH, which the GPU path skips building
+    if (!use_cuda && !bvh_world && !world.objects.empty())
+        bvh_world = world.build_bvh();
+    reset_tiles();
+    std::cout << "Ray tracer CUDA: " << (use_cuda ? "ENABLED" : "DISABLED") << std::endl;
+}
+
 void RealtimeRayTracer::render_one_tile()
 {
     if (!is_active)
         return;
 
     auto start_time = std::chrono::high_resolution_clock::now();
+
+    if (use_cuda && cuda_available && cuda_scene_tris > 0)
+    {
+        if (render_frame_gpu(true))
+        {
+            // the whole image is done, so there is no tile cursor to advance
+            current_tile_x = 0;
+            current_tile_y = total_tiles_y;
+
+            auto end = std::chrono::high_resolution_clock::now();
+            update_performance_stats(
+                std::chrono::duration<float, std::milli>(end - start_time).count());
+            return;
+        }
+    }
 
     // only ray trace if we have tiles left to do
     if (current_tile_y < total_tiles_y)
@@ -262,6 +613,7 @@ void RealtimeRayTracer::mark_scene_dirty()
 {
     world_needs_update = true;
     reset_tiles(); // Start over when scene changes
+    restart_accumulation();
 }
 
 void RealtimeRayTracer::print_detailed_status() const
@@ -496,11 +848,13 @@ rt_color RealtimeRayTracer::ray_color(const rt_ray &r, int depth) const
 
     rt_hit_record rec;
     // Use BVH for faster intersection testing
-    if (bvh_world && bvh_world->hit(r, 0.001, rt_infinity, rec))
+    if (!bvh_world)
+        return rt_color(0, 0, 0);
+    if (bvh_world->hit(r, 0.001, rt_infinity, rec))
     {
         rt_ray scattered;
         rt_color attenuation;
-        if (rec.mat->scatter(r, rec.p, rec.normal, attenuation, scattered))
+        if (rec.mat->scatter(r, rec.p, rec.normal, rec.front_face, attenuation, scattered))
             return attenuation * ray_color(scattered, depth - 1);
         return rt_color(0, 0, 0);
     }

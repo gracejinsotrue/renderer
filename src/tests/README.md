@@ -18,7 +18,8 @@ Run them from `src/` so the relative model paths resolve.
 | `test_deform` | does a sculpt or blend shape reach the GPU, and does an updated mesh match a freshly created one? |
 | `test_shaded` | do the CPU and CUDA shaded outputs stay numerically close on a textured model? |
 | `test_frustum` | does the GPU mesh path reject geometry that sits fully behind the camera? |
-| `test_engine` | does the real `Engine` render correctly on the CUDA path: scene graph, node transforms, two-pass shadows, light controls? |
+| `test_rt` | does the CUDA path tracer find the same first hits as the CPU BVH, and converge to the same radiance for diffuse, metal and glass? |
+| `test_engine` | does the real `Engine` render correctly on the CUDA path: scene graph, node transforms, two-pass shadows, light controls, ray tracer, accumulation and scene-change detection? |
 
 `test_engine` runs headless via SDL's dummy video driver and steps `render()`
 directly instead of calling `run()`. It is the only test that covers the
@@ -26,9 +27,10 @@ integration seams; everything else drives `cuda_triangle.cu` on its own.
 
 ## Local tools
 
-`make tools` builds the benchmarking and inspection programs. These measure or
-render for eyeballing rather than asserting, so they are gitignored and the
-target skips whichever are absent:
+`make tools` builds the benchmarking and inspection programs. These measure
+or render for eyeballing rather than asserting, so they are gitignored and
+the target skips whichever are absent. `bench_frame` has its own target,
+`make bench_frame`, because it needs SDL and the scene graph.
 
 | program | what it does |
 |---|---|
@@ -36,6 +38,8 @@ target skips whichever are absent:
 | `bench` | cost of getting a finished frame to the screen |
 | `bench_cull` | what backface culling is worth, across three models |
 | `bench_tile` | tile size sweep |
+| `bench_rt` | CPU vs CUDA path tracer timing, at the realtime settings |
+| `bench_frame` | whole engine frame timing: raster, raster + RT device composite, raster + RT host composite |
 | `profile_frame` | per-stage frame breakdown (setup / bin / raster / DMA) |
 | `render_png` | renders a model to TGA so the shading can be looked at |
 
