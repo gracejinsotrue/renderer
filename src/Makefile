@@ -10,8 +10,8 @@ NVCCFLAGS = -std=c++17 -O2 -ccbin $(NVCC_CCBIN)
 INCLUDES = -I/usr/include/SDL2
 LIBS = -lSDL2 -lSDL2main -lm
 
-# source files (includes ray tracing and scene graph)
-SOURCES = main.cpp Engine.cpp model.cpp our_gl.cpp tgaimage.cpp geometry.cpp Scene.cpp SceneNode.cpp ray_tracer_integration.cpp raytracing.cpp
+# source files
+SOURCES = main.cpp Engine.cpp model.cpp our_gl.cpp tgaimage.cpp geometry.cpp Scene.cpp SceneNode.cpp
 OBJECTS = $(SOURCES:.cpp=.o)
 TARGET = unified_engine
 
@@ -24,8 +24,8 @@ all: $(TARGET)
 -include $(DEPS)
 
 #link executable
-$(TARGET): $(OBJECTS) cuda_triangle.o cuda_raytracer.o
-	$(CXX) $(OBJECTS) cuda_triangle.o cuda_raytracer.o -o $(TARGET) $(LIBS) \
+$(TARGET): $(OBJECTS) cuda_triangle.o
+	$(CXX) $(OBJECTS) cuda_triangle.o -o $(TARGET) $(LIBS) \
 	  -L/usr/local/cuda/lib64 -lcudart
 
 # Compile source files
@@ -36,18 +36,14 @@ $(TARGET): $(OBJECTS) cuda_triangle.o cuda_raytracer.o
 cuda_triangle.o: cuda_triangle.cu geometry.h tgaimage.h
 	$(NVCC) $(NVCCFLAGS) -c cuda_triangle.cu -o cuda_triangle.o
 
-cuda_raytracer.o: cuda_raytracer.cu
-	$(NVCC) $(NVCCFLAGS) -c cuda_raytracer.cu -o cuda_raytracer.o
-
 # Standalone GPU tests, see tests/README.md. Run from src/.
 # Regression tests: each asserts and exits non-zero on failure.
-TESTS = test_cull test_blit test_mesh test_deform test_shaded test_frustum test_rt
+TESTS = test_cull test_blit test_mesh test_deform test_shaded test_frustum
 
 # Local benchmarking and inspection tools. Not part of the regression
 # suite and not tracked in git, so `tools` skips any that are absent.
-TOOLS = test_wind bench bench_cull bench_tile bench_rt profile_frame render_png
+TOOLS = test_wind bench bench_cull bench_tile profile_frame render_png
 TESTOBJS = model.o tgaimage.o geometry.o our_gl.o cuda_triangle.o \
-           cuda_raytracer.o raytracing.o ray_tracer_integration.o \
            Scene.o SceneNode.o
 
 tests: $(TESTOBJS)
@@ -68,8 +64,7 @@ tools: $(TESTOBJS)
 
 # Headless end-to-end test of the real Engine (needs SDL2 + the scene graph).
 ENGOBJS = Engine.o Scene.o SceneNode.o model.o our_gl.o tgaimage.o \
-          geometry.o ray_tracer_integration.o raytracing.o cuda_triangle.o \
-          cuda_raytracer.o
+          geometry.o cuda_triangle.o
 
 test_engine: $(ENGOBJS)
 	mkdir -p tests/bin
@@ -77,15 +72,9 @@ test_engine: $(ENGOBJS)
 	  tests/test_engine.cpp $(ENGOBJS) $(LIBS) \
 	  -L/usr/local/cuda/lib64 -lcudart
 
-bench_frame: $(ENGOBJS)
-	mkdir -p tests/bin
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -I. -o tests/bin/bench_frame \
-	  tests/bench_frame.cpp $(ENGOBJS) $(LIBS) \
-	  -L/usr/local/cuda/lib64 -lcudart
-
 # Clean build files
 clean:
-	rm -f $(OBJECTS) $(DEPS) cuda_triangle.o cuda_raytracer.o $(TARGET)
+	rm -f $(OBJECTS) $(DEPS) cuda_triangle.o $(TARGET)
 	rm -rf tests/bin
 
 # install SDL2 (Ubuntu/Debian)
@@ -113,13 +102,5 @@ capture-rotation: $(TARGET)
 
 .PHONY: all tests clean install-deps install-deps-mac run debug setup capture-rotation
 
-# dependencies
-Engine.o: Engine.cpp Engine.h geometry.h model.h tgaimage.h our_gl.h Scene.h SceneNode.h ray_tracer_integration.h bvh.h
-main.o: main.cpp Engine.h geometry.h model.h tgaimage.h our_gl.h Scene.h SceneNode.h ray_tracer_integration.h
-model.o: model.cpp model.h geometry.h tgaimage.h
-our_gl.o: our_gl.cpp our_gl.h tgaimage.h geometry.h
-tgaimage.o: tgaimage.cpp tgaimage.h
-geometry.o: geometry.cpp geometry.h
-Scene.o: Scene.cpp Scene.h SceneNode.h model.h
-SceneNode.o: SceneNode.cpp SceneNode.h model.h
-ray_tracer_integration.o: ray_tracer_integration.cpp ray_tracer_integration.h bvh.h unified_math.h
+# header dependencies come from -MMD -MP via $(DEPS); there is no hand-written
+# list to keep in sync.

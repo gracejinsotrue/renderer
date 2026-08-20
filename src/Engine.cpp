@@ -38,7 +38,6 @@ bool Engine::init()
     }
 
     // Initialize real-time ray tracer
-    realtimeRT = std::make_unique<RealtimeRayTracer>(renderWidth, renderHeight);
 
     // window
     window = SDL_CreateWindow("MULTI OBJECT 3D ENGINE THIS BETTER WORK!!!",
@@ -103,7 +102,6 @@ bool Engine::init()
     std::cout << "  Arrow keys - Move light source" << std::endl;
     std::cout << "  F - Toggle wireframe mode" << std::endl;
     std::cout << "  T - Toggle stats display" << std::endl;
-    std::cout << "  0 - Cycle ray tracer surface (diffuse/metal/glass)" << std::endl;
     std::cout << "  P - Capture frame (output.tga)" << std::endl;
     std::cout << "  B - Load background image" << std::endl;
     std::cout << "  C - Clear background" << std::endl;
@@ -127,18 +125,6 @@ bool Engine::init()
     }
 
     return true;
-}
-
-void Engine::toggleRealtimeRayTracing()
-{
-    if (realtimeRT)
-    {
-        realtimeRT->toggle();
-        if (realtimeRT->is_enabled())
-        {
-            realtimeRT->mark_scene_dirty();
-        }
-    }
 }
 
 void Engine::zoomCamera(float amount)
@@ -494,10 +480,6 @@ void Engine::handleEvents()
             switch (event.key.keysym.sym)
             {
 
-            case SDLK_u:
-                toggleRealtimeRayTracing();
-                break;
-
             // Quality controls
             case SDLK_EQUALS: // '+' key
             case SDLK_PLUS:
@@ -505,10 +487,6 @@ void Engine::handleEvents()
                 {
                     // In vertex edit mode, adjust deformation strength
                     setDeformationStrength(vertexEditor.getDeformationStrength() * 1.2f);
-                }
-                else if (realtimeRT)
-                {
-                    realtimeRT->increase_quality();
                 }
                 break;
 
@@ -518,10 +496,6 @@ void Engine::handleEvents()
                     // In vertex edit mode, adjust deformation strength
                     setDeformationStrength(vertexEditor.getDeformationStrength() * 0.8f);
                 }
-                else if (realtimeRT)
-                {
-                    realtimeRT->decrease_quality();
-                }
                 break;
 
             // Blend strength controls
@@ -530,50 +504,12 @@ void Engine::handleEvents()
                 {
                     setSelectionRadius(vertexEditor.getSelectionRadius() * 0.8f);
                 }
-                else if (realtimeRT)
-                {
-                    realtimeRT->adjust_blend_strength(-0.1f);
-                }
                 break;
 
             case SDLK_RIGHTBRACKET: // ']' key
                 if (vertexEditMode)
                 {
                     setSelectionRadius(vertexEditor.getSelectionRadius() * 1.2f);
-                }
-                else if (realtimeRT)
-                {
-                    realtimeRT->adjust_blend_strength(0.1f);
-                }
-                break;
-
-            // Toggle features
-            case SDLK_o:
-                if (realtimeRT)
-                {
-                    realtimeRT->toggle_progress_overlay();
-                }
-                break;
-
-            case SDLK_m:
-                if (realtimeRT)
-                {
-                    realtimeRT->toggle_adaptive_quality();
-                }
-                break;
-
-            case SDLK_COMMA:
-                if (realtimeRT)
-                {
-                    realtimeRT->toggle_tile_boundaries();
-                }
-                break;
-
-            // Status display
-            case SDLK_j:
-                if (realtimeRT)
-                {
-                    realtimeRT->print_detailed_status();
                 }
                 break;
 
@@ -601,9 +537,6 @@ void Engine::handleEvents()
 
             case SDLK_t:
                 showStats = !showStats;
-                break;
-            case SDLK_0:
-                cycleRayTracerMaterial();
                 break;
             case SDLK_p:
                 captureFrame("output.tga");
@@ -680,10 +613,6 @@ void Engine::handleEvents()
                 {
                     scene.printSceneHierarchy();
                 }
-                break;
-            case SDLK_y:
-                std::cout << "Y key pressed! Starting ray trace..." << std::endl;
-                handleRayTracingInput();
                 break;
 
             // ===== VERTEX EDIT MODE CONTROLS =====
@@ -1038,10 +967,6 @@ void Engine::update()
     // update scene transforms
     scene.updateAllTransforms();
     // update rt ray tracer
-    if (realtimeRT)
-    {
-        realtimeRT->update_scene(scene);
-    }
 
     // object manipulation with keyboard
     float moveSpeed = 2.0f * deltaTime;
@@ -1263,40 +1188,17 @@ void Engine::render()
     // then render 3D scene (but don't clear framebuffer in renderScene)
     renderScene();
 
-    // When both the rasterizer and the ray tracer are on the device, the trace
-    // and the composite both happen there and the frame never comes down. Only
-    // the vertex overlay still needs a host copy.
-    bool rtOnGPU = false;
-    if (frameOnGPU && realtimeRT && realtimeRT->is_enabled() &&
-        !(vertexEditMode && vertexEditor.hasTarget()))
-    {
-        rtOnGPU = realtimeRT->render_and_blend_on_gpu();
-    }
-
-    // the overlays below composite into the host framebuffer, so if the frame is
-    // still sitting in device memory it has to come down first
-    bool needsHostFrame = (vertexEditMode && vertexEditor.hasTarget()) ||
-                          (realtimeRT && realtimeRT->is_enabled() && !rtOnGPU);
-    if (frameOnGPU && needsHostFrame)
+    // The vertex overlay is the only thing left that composites on the host,
+    // so the frame comes down from the device only when it is showing.
+    if (frameOnGPU && vertexEditMode && vertexEditor.hasTarget())
     {
         cudaCopyResults(framebuffer);
         frameOnGPU = false;
     }
 
-    // vertex editor overlay
     if (vertexEditMode && vertexEditor.hasTarget())
     {
         vertexEditor.renderVertexOverlay(framebuffer, renderWidth, renderHeight);
-    }
-
-    // host fallback: trace a tile and blend on the CPU
-    if (realtimeRT && realtimeRT->is_enabled() && !rtOnGPU)
-    {
-        // Ray trace one tile this frame
-        realtimeRT->render_one_tile();
-
-        // Blend ray traced result with rasterizer
-        realtimeRT->blend_with_framebuffer(framebuffer);
     }
 }
 
@@ -1856,30 +1758,6 @@ void Engine::shutdown()
 
     SDL_Quit();
 }
-void Engine::rayTraceCurrentScene()
-{
-    std::cout << "rayTraceCurrentScene() called!" << std::endl;
-    std::cout << "Mesh count: " << scene.getMeshCount() << std::endl;
-
-    if (scene.getMeshCount() == 0)
-    {
-        std::cout << "No meshes to ray trace! Load a model first." << std::endl;
-        return;
-    }
-
-    std::cout << "\n🎬 Starting ray trace of current scene..." << std::endl;
-    std::cout << "Camera position: ("
-              << scene.camera.position.x << ", "
-              << scene.camera.position.y << ", "
-              << scene.camera.position.z << ")" << std::endl;
-
-    RayTracerInterface::ray_trace_scene(scene);
-}
-
-void Engine::handleRayTracingInput()
-{
-    rayTraceCurrentScene();
-}
 
 // uploads a model's geometry to the device the first time it is drawn, then
 // hands back the same handle every frame after that.
@@ -1961,29 +1839,6 @@ int Engine::getCudaMesh(Model *model)
 // The rasterizer ignores this; it only changes how the ray tracer shades the
 // object. Marking the tracer dirty rebuilds its scene and restarts the
 // accumulated image, since the old samples used the previous surface.
-void Engine::cycleRayTracerMaterial()
-{
-    SceneNode *selected = scene.getSelectedNode();
-    if (!selected || !selected->hasModel())
-    {
-        std::cout << "Select an object first" << std::endl;
-        return;
-    }
-
-    switch (selected->rtSurface)
-    {
-    case SceneNode::RT_DIFFUSE: selected->rtSurface = SceneNode::RT_METAL; break;
-    case SceneNode::RT_METAL:   selected->rtSurface = SceneNode::RT_GLASS; break;
-    default:                    selected->rtSurface = SceneNode::RT_DIFFUSE; break;
-    }
-
-    std::cout << "Ray tracer surface for " << selected->name << ": "
-              << selected->rtSurfaceName() << std::endl;
-
-    if (realtimeRT)
-        realtimeRT->mark_scene_dirty();
-}
-
 void Engine::toggleCudaRendering()
 {
     if (cuda_available)

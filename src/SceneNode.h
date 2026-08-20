@@ -38,27 +38,6 @@ public:
     // Optional model data
     Model *model; // raw pointer - scene will manage Model lifetime
 
-    // Surface type the ray tracer gives this node. The rasterizer ignores it.
-    enum RTSurface
-    {
-        RT_DIFFUSE,
-        RT_METAL,
-        RT_GLASS
-    };
-    RTSurface rtSurface;
-    float rtFuzz;   // metal roughness, 0 is a perfect mirror
-    float rtIOR;    // glass refractive index
-
-    const char *rtSurfaceName() const
-    {
-        switch (rtSurface)
-        {
-        case RT_METAL: return "metal";
-        case RT_GLASS: return "glass";
-        default: return "diffuse";
-        }
-    }
-
     // Node types
     enum NodeType
     {

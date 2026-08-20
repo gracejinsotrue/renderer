@@ -4,8 +4,6 @@
 #include "Engine.h"
 #include "shaders.h"
 
-// include our unified math system (this will include ray tracer headers)
-#include "unified_math.h"
 
 // global variables for shaders
 Model *model = NULL;
@@ -13,60 +11,9 @@ Vec3f light_dir(1, 1, 1);
 const int width = 800;
 const int height = 800;
 
-// tsest function for math system integration
-void test_math_integration()
-{
-    std::cout << "\n=== TESTING UNIFIED MATH SYSTEM ===" << std::endl;
-
-    // test 1: Basic conversion
-    std::cout << "\n1. Testing basic vector conversion..." << std::endl;
-    bool conversion_test = UnifiedMathTest::test_conversions();
-
-    // test 2: Test unified math operations
-    std::cout << "\n2. Testing unified math operations..." << std::endl;
-    UnifiedVec3 v1(1.0f, 2.0f, 3.0f);
-    UnifiedVec3 v2(4.0f, 5.0f, 6.0f);
-
-    UnifiedVec3 cross_result = UnifiedMath::cross(v1, v2);
-    float dot_result = UnifiedMath::dot(v1, v2);
-    float length_result = UnifiedMath::length(v1);
-
-    std::cout << "v1: (" << v1.x << ", " << v1.y << ", " << v1.z << ")" << std::endl;
-    std::cout << "v2: (" << v2.x << ", " << v2.y << ", " << v2.z << ")" << std::endl;
-    std::cout << "cross(v1, v2): (" << cross_result.x << ", " << cross_result.y << ", " << cross_result.z << ")" << std::endl;
-    std::cout << "dot(v1, v2): " << dot_result << std::endl;
-    std::cout << "length(v1): " << length_result << std::endl;
-
-    // test 3: Ray conversion
-    std::cout << "\n3. Testing ray conversion..." << std::endl;
-    UnifiedRay unified_ray(UnifiedVec3(0, 0, 0), UnifiedVec3(1, 0, 0));
-    rt_ray rt_ray_converted = unified_ray.to_rt_ray();
-    UnifiedRay converted_back = UnifiedRay::from_rt_ray(rt_ray_converted);
-
-    std::cout << "Original ray origin: (" << unified_ray.origin.x << ", " << unified_ray.origin.y << ", " << unified_ray.origin.z << ")" << std::endl;
-    std::cout << "Converted back origin: (" << converted_back.origin.x << ", " << converted_back.origin.y << ", " << converted_back.origin.z << ")" << std::endl;
-
-    // test 4: Color conversion
-    std::cout << "\n4. Testing color conversion..." << std::endl;
-    rt_color rt_col(0.5, 0.7, 0.3);
-    TGAColor tga_color = ColorConversion::rt_color_to_tga(rt_col);
-    rt_color converted_color = ColorConversion::tga_to_rt_color(tga_color);
-
-    std::cout << "Original RT color: (" << rt_col.x() << ", " << rt_col.y() << ", " << rt_col.z() << ")" << std::endl;
-    std::cout << "TGA color (RGB): (" << (int)tga_color[2] << ", " << (int)tga_color[1] << ", " << (int)tga_color[0] << ")" << std::endl;
-    std::cout << "Converted back: (" << converted_color.x() << ", " << converted_color.y() << ", " << converted_color.z() << ")" << std::endl;
-
-    std::cout << "\nMath integration test completed!" << std::endl;
-    std::cout << "=====================================\n"
-              << std::endl;
-}
-
 int main(int argc, char **argv)
 {
     std::cout << "Starting Multi-Object 3D Engine with Interactive Vertex Editor..." << std::endl;
-
-    // Test our unified math system first
-    test_math_integration();
 
     // create engine instance
     Engine engine(1024, 768, 800, 800);

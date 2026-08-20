@@ -52,8 +52,7 @@ void Transform::interpolate(const Transform &other, float t, Transform &result) 
 // sceneNode implementation
 SceneNode::SceneNode(const std::string &nodeName, NodeType type)
     : name(nodeName), visible(true), selected(false), parent(nullptr),
-      model(nullptr), rtSurface(RT_DIFFUSE), rtFuzz(0.1f), rtIOR(1.5f),
-      nodeType(type)
+      model(nullptr), nodeType(type)
 {
 
     std::cout << "Created SceneNode: " << name << " (type: " << type << ")" << std::endl;
