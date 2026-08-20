@@ -6,6 +6,7 @@
 #include <string>
 #include <chrono>
 #include <set>
+#include <unordered_map>
 #include "geometry.h"
 #include "Scene.h" // new scene system!
 #include "our_gl.h"
@@ -20,7 +21,32 @@ extern "C"
     void cleanupCudaRasterizer();
     void cudaClearBuffers();
     void cudaRenderTriangle(const Vec4f &v0, const Vec4f &v1, const Vec4f &v2, const TGAColor &color);
-    void cudaCopyResults(TGAImage &framebuffer, TGAImage &zbuffer);
+    // fast path: device frame -> locked SDL texture, no host per-pixel work
+    void cudaBlitToTexture(void *dst, int dst_pitch);
+    // fallback: device frame -> host TGAImage, for overlays and TGA capture
+    void cudaCopyResults(TGAImage &framebuffer);
+    // per-frame triangle counts (offered / backface-culled / offscreen-culled)
+    void cudaGetRasterStats(int *submitted, int *culled_back, int *culled_offscreen,
+                            int *bin_overflow);
+    // GPU milliseconds for the most recent flush (bin pass / raster pass)
+    void cudaGetKernelTimings(float *upload_ms, float *bin_ms, float *raster_ms);
+    // persistent device geometry: upload once, transform on the GPU each frame
+    int cudaCreateMesh(const float *verts, int nverts, const int *faces, int nfaces,
+                       const float *corner_normals, const float *corner_uvs);
+    // slot: 0 diffuse, 1 normal map, 2 specular. px is a TGAImage buffer.
+    void cudaSetMeshTexture(int handle, int slot, const unsigned char *px,
+                            int w, int h, int bpp);
+    void cudaSetLinearTextureFiltering(int enabled);
+    void cudaUpdateMeshVerts(int handle, const float *verts, int nverts);
+    void cudaDestroyMesh(int handle);
+    // mshadow16 may be NULL for an unshadowed draw
+    void cudaDrawMesh(int handle, const float *mvp16, const float *clip16,
+                      const float *mit16,
+                      const float *light3, const float *light_rgb3,
+                      float light_intensity, const float *mshadow16, float shadow_bias,
+                      unsigned char r, unsigned char g, unsigned char b);
+    // rasterizes everything queued so far into the shadow depth buffer
+    void cudaRenderShadowPass();
 }
 
 class Engine
@@ -41,6 +67,20 @@ private:
     // use cuda
     bool cuda_available;
     bool use_cuda_rendering;
+    // true when the finished frame still lives only in device memory, so
+    // present() can blit it directly instead of going through `framebuffer`
+    bool frameOnGPU;
+    // Model -> device mesh. geometry is uploaded once and re-transformed on
+    // the GPU each frame. geomVersion is Model::geometryVersion() as of that
+    // upload; when it diverges the positions are re-sent, so a sculpt or blend
+    // shape never leaves stale geometry on the device.
+    struct CudaMesh
+    {
+        int handle;
+        unsigned int geomVersion;
+    };
+    std::unordered_map<Model *, CudaMesh> cudaMeshes;
+    int getCudaMesh(Model *model);
 
     // Input state
     bool keys[SDL_NUM_SCANCODES];

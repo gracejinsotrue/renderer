@@ -9,6 +9,12 @@
 class Model
 {
 private:
+    enum TextureFilterMode
+    {
+        FILTER_POINT,
+        FILTER_LINEAR
+    };
+    static TextureFilterMode textureFilterMode_;
     std::vector<Vec3f> verts_;
     std::vector<std::vector<Vec3i>> faces_; // this Vec3i means vertex/uv/normal
     std::vector<Vec3f> norms_;
@@ -21,6 +27,10 @@ private:
     // Backup/restore for animation
     std::vector<Vec3f> originalVerts_; // Backup of original vertices
     bool hasBackup_;
+
+    // bumped on every write to verts_, so cached copies of the geometry
+    // (notably the GPU-resident mesh in Engine) can tell when they are stale.
+    unsigned int geomVersion_;
 
     // Blend shape system
     std::map<std::string, std::vector<Vec3f>> blendShapes;
@@ -40,8 +50,17 @@ public:
     float specular(Vec2f uv);
     std::vector<int> face(int idx);
 
+    static void setLinearTextureFiltering(bool enabled);
+    static bool usesLinearTextureFiltering();
+
+    // raw maps, for uploading to the GPU as textures
+    TGAImage &diffuseMap() { return diffusemap_; }
+    TGAImage &normalMap() { return normalmap_; }
+    TGAImage &specularMap() { return specularmap_; }
+
     void setVertex(int i, const Vec3f &newPos);
     Vec3f *getVertexData();
+    unsigned int geometryVersion() const { return geomVersion_; }
     const std::vector<Vec3f> &getVertices() const { return verts_; }
     void updateVertex(int index, const Vec3f &offset);
     void resetVertices(); // Reset to original positions

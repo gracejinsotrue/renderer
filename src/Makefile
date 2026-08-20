@@ -2,6 +2,11 @@
 
 CXX = g++
 CXXFLAGS = -std=c++17 -O2 -Wall -Wextra
+NVCC = /usr/local/cuda/bin/nvcc
+# CUDA 12.0's nvcc refuses host gcc > 12, and the default g++ here is 14,
+# so pin the host compiler. bump this if you upgrade the CUDA toolkit.
+NVCC_CCBIN = g++-11
+NVCCFLAGS = -std=c++17 -O2 -ccbin $(NVCC_CCBIN)
 INCLUDES = -I/usr/include/SDL2
 LIBS = -lSDL2 -lSDL2main -lm
 
@@ -21,9 +26,49 @@ $(TARGET): $(OBJECTS) cuda_triangle.o
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
+
+cuda_triangle.o: cuda_triangle.cu geometry.h tgaimage.h
+	$(NVCC) $(NVCCFLAGS) -c cuda_triangle.cu -o cuda_triangle.o
+
+# Standalone GPU tests, see tests/README.md. Run from src/.
+# Regression tests: each asserts and exits non-zero on failure.
+TESTS = test_cull test_blit test_mesh test_deform test_shaded test_frustum
+
+# Local benchmarking and inspection tools. Not part of the regression
+# suite and not tracked in git, so `tools` skips any that are absent.
+TOOLS = test_wind bench bench_cull bench_tile profile_frame render_png
+TESTOBJS = model.o tgaimage.o geometry.o our_gl.o cuda_triangle.o
+
+tests: $(TESTOBJS)
+	mkdir -p tests/bin
+	for t in $(TESTS); do \
+	  $(CXX) $(CXXFLAGS) -I. -o tests/bin/$$t tests/$$t.cpp $(TESTOBJS) \
+	    -L/usr/local/cuda/lib64 -lcudart || exit 1; \
+	done
+	@echo "built: $(TESTS) -> tests/bin/"
+
+tools: $(TESTOBJS)
+	mkdir -p tests/bin
+	for t in $(TOOLS); do \
+	  [ -f tests/$$t.cpp ] || continue; \
+	  $(CXX) $(CXXFLAGS) -I. -o tests/bin/$$t tests/$$t.cpp $(TESTOBJS) \
+	    -L/usr/local/cuda/lib64 -lcudart || exit 1; \
+	done
+
+# Headless end-to-end test of the real Engine (needs SDL2 + the scene graph).
+ENGOBJS = Engine.o Scene.o SceneNode.o model.o our_gl.o tgaimage.o \
+          geometry.o ray_tracer_integration.o raytracing.o cuda_triangle.o
+
+test_engine: $(ENGOBJS)
+	mkdir -p tests/bin
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -I. -o tests/bin/test_engine \
+	  tests/test_engine.cpp $(ENGOBJS) $(LIBS) \
+	  -L/usr/local/cuda/lib64 -lcudart
+
 # Clean build files
 clean:
-	rm -f $(OBJECTS) $(TARGET)
+	rm -f $(OBJECTS) cuda_triangle.o $(TARGET)
+	rm -rf tests/bin
 
 # install SDL2 (Ubuntu/Debian)
 install-deps:
@@ -48,7 +93,7 @@ setup:
 capture-rotation: $(TARGET)
 	./$(TARGET) --capture-sequence rotation 360 10.0
 
-.PHONY: all clean install-deps install-deps-mac run debug setup capture-rotation
+.PHONY: all tests clean install-deps install-deps-mac run debug setup capture-rotation
 
 # dependencies
 Engine.o: Engine.cpp Engine.h geometry.h model.h tgaimage.h our_gl.h Scene.h SceneNode.h ray_tracer_integration.h bvh.h

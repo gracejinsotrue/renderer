@@ -5,18 +5,12 @@
 #include <cmath>
 #include <algorithm>
 
-extern "C"
-{
-    bool initCudaRasterizer(int width, int height);
-    void cleanupCudaRasterizer();
-    void cudaClearBuffers();
-    void cudaRenderTriangle(const Vec4f &v0, const Vec4f &v1, const Vec4f &v2, const TGAColor &color);
-    void cudaCopyResults(TGAImage &framebuffer, TGAImage &zbuffer);
-}
+// the CUDA entry points are declared in Engine.h, not duplicated here
 
 Engine::Engine(int winWidth, int winHeight, int renWidth, int renHeight)
     : window(nullptr), sdlRenderer(nullptr), frameTexture(nullptr),
       framebuffer(renWidth, renHeight, TGAImage::RGB), zbuffer(renWidth, renHeight, TGAImage::GRAYSCALE),
+      frameOnGPU(false),
       running(false), wireframe(false), showStats(true),
       windowWidth(winWidth), windowHeight(winHeight), renderWidth(renWidth), renderHeight(renHeight),
       mouseX(0), mouseY(0), mouseDeltaX(0), mouseDeltaY(0), lastMouseX(0), lastMouseY(0), mousePressed(false)
@@ -25,9 +19,8 @@ Engine::Engine(int winWidth, int winHeight, int renWidth, int renHeight)
     // init imput state
     memset(keys, 0, sizeof(keys));
 
-    // shadowbuffer
-    shadowbuffer.resize(renderWidth * renderHeight);
-    std::fill(shadowbuffer.begin(), shadowbuffer.end(), std::numeric_limits<float>::max());
+    // shadowbuffer: sized here, and the shaders read its size from our_gl
+    resizeShadowBuffer(renderWidth, renderHeight);
 }
 
 Engine::~Engine()
@@ -1239,18 +1232,38 @@ void Engine::updateCamera()
 
 void Engine::render()
 {
-    // Clear buffers
-    framebuffer.clear();
-    for (int i = 0; i < renderWidth * renderHeight; i++)
-    {
-        zbuffer.set(i % renderWidth, i / renderWidth, TGAColor(0));
-    }
+    bool cudaPath = use_cuda_rendering && cuda_available;
+    frameOnGPU = false;
 
-    // draw the background AND THEN RENDER 3D SCENE
-    drawBackground();
+    // cheap memset, and it's what gets shown if the scene turns out to be empty
+    framebuffer.clear();
+
+    if (!cudaPath)
+    {
+        for (int i = 0; i < renderWidth * renderHeight; i++)
+        {
+            zbuffer.set(i % renderWidth, i / renderWidth, TGAColor(0));
+        }
+
+        // draw the background AND THEN RENDER 3D SCENE
+        drawBackground();
+    }
+    // the CUDA path owns both buffers on the device and overwrites every
+    // pixel, so the host zbuffer clear and the background blit would be
+    // discarded. skipping them changes nothing on screen.
 
     // then render 3D scene (but don't clear framebuffer in renderScene)
     renderScene();
+
+    // the overlays below composite into the host framebuffer, so if the frame is
+    // still sitting in device memory it has to come down first
+    bool needsHostFrame = (vertexEditMode && vertexEditor.hasTarget()) ||
+                          (realtimeRT && realtimeRT->is_enabled());
+    if (frameOnGPU && needsHostFrame)
+    {
+        cudaCopyResults(framebuffer);
+        frameOnGPU = false;
+    }
 
     // NEW: Add vertex editor overlay
     if (vertexEditMode && vertexEditor.hasTarget())
@@ -1298,6 +1311,11 @@ void Engine::drawBackground()
 
 void Engine::renderScene()
 {
+    // recompute world matrices from the local transforms. getWorldMatrix()
+    // reads a cached value that only this updates, so without it every node
+    // reports identity and all objects draw at the origin.
+    scene.updateAllTransforms();
+
     // get all visible mesh nodes instead of single animated model
     std::vector<SceneNode *> visibleMeshes;
     scene.getVisibleMeshNodes(visibleMeshes);
@@ -1317,36 +1335,101 @@ void Engine::renderScene()
 
     if (use_cuda_rendering && cuda_available)
     {
-        // CUDA rendering path
+        // CUDA rendering path: two passes, same shape as the CPU path
         cudaClearBuffers();
+
+        // PASS 1: depth from the light's point of view, orthographic
+        lookat(scene.light.direction, Vec3f(0, 0, 0), scene.camera.up);
+        viewport(renderWidth / 8, renderHeight / 8, renderWidth * 3 / 4, renderHeight * 3 / 4);
+        projection(0);
+        Matrix lightM = Viewport * Projection * ModelView;
+        Matrix lightModelView = ModelView;
+
+        float ident[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+        float nolight[3] = {0, 0, 1};
+        float white[3] = {1.f, 1.f, 1.f};
+
+        for (SceneNode *meshNode : visibleMeshes)
+        {
+            int mesh = getCudaMesh(meshNode->model);
+            if (mesh < 0)
+                continue;
+            Matrix lm = lightM * meshNode->getWorldMatrix();
+            Matrix lc = Projection * lightModelView * meshNode->getWorldMatrix();
+            float mvp[16], clip[16];
+            for (int r = 0; r < 4; r++)
+                for (int c = 0; c < 4; c++)
+                {
+                    mvp[r * 4 + c] = lm[r][c];
+                    clip[r * 4 + c] = lc[r][c];
+                }
+            cudaDrawMesh(mesh, mvp, clip, ident, nolight, white, 1.0f,
+                         NULL, 0.f, 255, 255, 255);
+        }
+        cudaRenderShadowPass();
+
+        // PASS 2: the camera view, sampling that depth buffer
+        lookat(scene.camera.position, scene.camera.target, scene.camera.up);
+        viewport(renderWidth / 8, renderHeight / 8, renderWidth * 3 / 4, renderHeight * 3 / 4);
+        projection(scene.camera.fov);
+        ModelView = originalModelView;
 
         for (SceneNode *meshNode : visibleMeshes)
         {
             Model *model = meshNode->model;
+            int mesh = getCudaMesh(model);
+            if (mesh < 0)
+                continue;
+
             Matrix nodeTransform = meshNode->getWorldMatrix();
             Matrix currentModelView = originalModelView * nodeTransform;
-            Matrix transform = Viewport * Projection * currentModelView;
+            Matrix clipTransform = Projection * currentModelView;
+            Matrix transform = Viewport * clipTransform;
 
-            for (int i = 0; i < model->nfaces(); i++)
-            {
-                Vec4f vertices[3];
-                for (int j = 0; j < 3; j++)
+            // eye space, to match the light below. not Projection*ModelView:
+            // the light is carried by currentModelView alone.
+            Matrix MIT = currentModelView.invert_transpose();
+            Vec3f l = proj<3>(currentModelView * embed<4>(scene.light.direction, 0.f)).normalize();
+
+            // screen space -> shadow-map space. NOTE: adjugate() returns the
+            // COFACTOR matrix, so adjugate()/det() is the inverse-TRANSPOSE.
+            // invert() is the real inverse.
+            Matrix lightXform = lightM * nodeTransform;
+            Matrix camXform = transform;
+            Matrix shadowXform = lightXform * camXform.invert();
+
+            float mvp[16], clip[16], mit[16], msh[16];
+            for (int r = 0; r < 4; r++)
+                for (int c = 0; c < 4; c++)
                 {
-                    Vec3f v = model->vert(i, j);
-                    vertices[j] = transform * embed<4>(v);
+                    mvp[r * 4 + c] = transform[r][c];
+                    clip[r * 4 + c] = clipTransform[r][c];
+                    mit[r * 4 + c] = MIT[r][c];
+                    msh[r * 4 + c] = shadowXform[r][c];
                 }
+            float light[3] = {l.x, l.y, l.z};
+            float lightColor[3] = {
+                std::max(0.0f, scene.light.color.x),
+                std::max(0.0f, scene.light.color.y),
+                std::max(0.0f, scene.light.color.z)};
+            float lightIntensity = std::max(0.0f, scene.light.intensity);
 
-                TGAColor color(150, 100, 100); // todo: fix
-                cudaRenderTriangle(vertices[0], vertices[1], vertices[2], color);
-            }
+            // Shadow bias. Depth spans 0..255 regardless of world scale, so
+            // this is a fraction of that range, not a world distance. 2.0 gives
+            // contact shadows without acne; tune per scene if needed.
+            cudaDrawMesh(mesh, mvp, clip, mit, light, lightColor, lightIntensity,
+                         msh, 2.0f, 200, 170, 150);
         }
 
-        cudaCopyResults(framebuffer, zbuffer);
+        // no readback: leave the frame on the device for present() to blit.
+        // the pending kernels are flushed by whichever of cudaBlitToTexture /
+        // cudaCopyResults runs first, so the GPU keeps working meanwhile.
+        frameOnGPU = true;
     }
     else
     {
         // Original CPU rendering path
-        std::fill(shadowbuffer.begin(), shadowbuffer.end(), std::numeric_limits<float>::max());
+        clearShadowBuffer();
 
         Matrix M;
         {
@@ -1411,15 +1494,21 @@ void Engine::renderScene()
                 Matrix currentModelView = originalModelView * nodeTransform;
 
                 Matrix current_transform = Viewport * Projection * currentModelView;
-                Matrix shadow_transform = M * (current_transform.adjugate() / current_transform.det());
+                // adjugate()/det() is the inverse-TRANSPOSE, not the inverse.
+                // invert() is the one wanted here.
+                Matrix shadow_transform = M * current_transform.invert();
 
                 // set global shader variables -- temporary solution until i figure something out better
                 ::model = model;
                 light_dir = scene.light.direction;
 
+                // uniform_M carries the light, uniform_MIT the normal. both
+                // must land in the same space, so both are ModelView-only.
                 ShadowMappingShader shader(currentModelView,
-                                           (Projection * currentModelView).invert_transpose(),
-                                           shadow_transform);
+                                           currentModelView.invert_transpose(),
+                                           shadow_transform,
+                                           scene.light.color,
+                                           scene.light.intensity);
 
                 Matrix oldModelView = ModelView;
                 ModelView = currentModelView;
@@ -1587,20 +1676,29 @@ void Engine::present()
 
     if (SDL_LockTexture(frameTexture, NULL, &pixels, &pitch) == 0)
     {
-        unsigned char *tgaData = framebuffer.buffer();
-        unsigned char *sdlPixels = (unsigned char *)pixels;
-
-        // convert BGR to RGB and flip vertically
-        for (int y = 0; y < renderHeight; y++)
+        if (frameOnGPU)
         {
-            for (int x = 0; x < renderWidth; x++)
-            {
-                int tgaIndex = ((renderHeight - 1 - y) * renderWidth + x) * 3;
-                int sdlIndex = (y * renderWidth + x) * 3;
+            // device buffer is already RGB24 in SDL row order: straight DMA,
+            // no swizzle, no flip, no per-pixel host work
+            cudaBlitToTexture(pixels, pitch);
+        }
+        else
+        {
+            unsigned char *tgaData = framebuffer.buffer();
+            unsigned char *sdlPixels = (unsigned char *)pixels;
 
-                sdlPixels[sdlIndex + 0] = tgaData[tgaIndex + 2]; // R
-                sdlPixels[sdlIndex + 1] = tgaData[tgaIndex + 1]; // G
-                sdlPixels[sdlIndex + 2] = tgaData[tgaIndex + 0]; // B
+            // convert BGR to RGB and flip vertically
+            for (int y = 0; y < renderHeight; y++)
+            {
+                for (int x = 0; x < renderWidth; x++)
+                {
+                    int tgaIndex = ((renderHeight - 1 - y) * renderWidth + x) * 3;
+                    int sdlIndex = (y * renderWidth + x) * 3;
+
+                    sdlPixels[sdlIndex + 0] = tgaData[tgaIndex + 2]; // R
+                    sdlPixels[sdlIndex + 1] = tgaData[tgaIndex + 1]; // G
+                    sdlPixels[sdlIndex + 2] = tgaData[tgaIndex + 0]; // B
+                }
             }
         }
 
@@ -1629,6 +1727,13 @@ void Engine::present()
 
 void Engine::captureFrame(const std::string &filename)
 {
+    // writing a TGA needs the frame on the host
+    if (frameOnGPU)
+    {
+        cudaCopyResults(framebuffer);
+        frameOnGPU = false;
+    }
+
     framebuffer.flip_vertically();
     framebuffer.write_tga_file(filename.c_str());
     framebuffer.flip_vertically(); // Flip back for next frame
@@ -1703,6 +1808,16 @@ void Engine::updateWindowTitle()
 
 void Engine::shutdown()
 {
+    // device geometry outlives the scene graph, so free it before tearing
+    // the rasterizer down
+    if (cuda_available)
+    {
+        for (auto &kv : cudaMeshes)
+            cudaDestroyMesh(kv.second.handle);
+        cudaMeshes.clear();
+        cleanupCudaRasterizer();
+    }
+
     if (frameTexture)
     {
         SDL_DestroyTexture(frameTexture);
@@ -1746,6 +1861,83 @@ void Engine::rayTraceCurrentScene()
 void Engine::handleRayTracingInput()
 {
     rayTraceCurrentScene();
+}
+
+// uploads a model's geometry to the device the first time it is drawn, then
+// hands back the same handle every frame after that.
+int Engine::getCudaMesh(Model *model)
+{
+    if (!model || !cuda_available)
+        return -1;
+
+    auto it = cudaMeshes.find(model);
+    if (it != cudaMeshes.end())
+    {
+        // deformed since the last upload: re-send positions only. topology,
+        // uvs and normals are untouched by sculpting and blend shapes, and the
+        // CPU path does not recompute normals after a deformation either.
+        unsigned int v = model->geometryVersion();
+        if (it->second.geomVersion != v)
+        {
+            cudaUpdateMeshVerts(it->second.handle,
+                                (const float *)model->getVertexData(),
+                                model->nverts());
+            it->second.geomVersion = v;
+        }
+        return it->second.handle;
+    }
+
+    int nverts = model->nverts();
+    int nfaces = model->nfaces();
+    if (nverts <= 0 || nfaces <= 0)
+        return -1;
+
+    // vertices stay indexed so sculpting can re-upload positions alone.
+    // normals and uvs go up unindexed, one set per triangle corner, which
+    // avoids carrying separate vt/vn index arrays.
+    std::vector<int> indices(nfaces * 3);
+    std::vector<float> cnorms(nfaces * 9);
+    std::vector<float> cuvs(nfaces * 6);
+    for (int i = 0; i < nfaces; i++)
+    {
+        std::vector<int> f = model->face(i);
+        for (int j = 0; j < 3; j++)
+        {
+            indices[i * 3 + j] = f[j];
+
+            Vec3f n = model->normal(i, j);
+            cnorms[(i * 3 + j) * 3 + 0] = n.x;
+            cnorms[(i * 3 + j) * 3 + 1] = n.y;
+            cnorms[(i * 3 + j) * 3 + 2] = n.z;
+
+            Vec2f uv = model->uv(i, j);
+            cuvs[(i * 3 + j) * 2 + 0] = uv.x;
+            cuvs[(i * 3 + j) * 2 + 1] = uv.y;
+        }
+    }
+
+    int handle = cudaCreateMesh((const float *)model->getVertexData(), nverts,
+                                indices.data(), nfaces,
+                                cnorms.data(), cuvs.data());
+
+    // textures upload once, alongside the geometry
+    if (handle >= 0)
+    {
+        TGAImage *maps[3] = {&model->diffuseMap(), &model->normalMap(), &model->specularMap()};
+        for (int slot = 0; slot < 3; slot++)
+        {
+            TGAImage *t = maps[slot];
+            if (t->get_width() > 0 && t->get_height() > 0 && t->buffer())
+                cudaSetMeshTexture(handle, slot, t->buffer(),
+                                   t->get_width(), t->get_height(), t->get_bytespp());
+        }
+    }
+
+    cudaMeshes[model] = {handle, model->geometryVersion()};
+
+    std::cout << "CUDA mesh uploaded: " << nverts << " verts, "
+              << nfaces << " faces (handle " << handle << ")" << std::endl;
+    return handle;
 }
 
 void Engine::toggleCudaRendering()

@@ -2,6 +2,7 @@
 #include <cmath>
 #include <limits>
 #include <cstdlib>
+#include <algorithm>
 #include "our_gl.h"
 
 Matrix ModelView;
@@ -10,6 +11,21 @@ Matrix Projection;
 
 // global shadow buffer
 std::vector<float> shadowbuffer;
+int shadowbuffer_w = 0, shadowbuffer_h = 0;
+
+void resizeShadowBuffer(int w, int h)
+{
+    shadowbuffer_w = w;
+    shadowbuffer_h = h;
+    shadowbuffer.resize((size_t)w * h);
+    clearShadowBuffer();
+}
+
+void clearShadowBuffer()
+{
+    std::fill(shadowbuffer.begin(), shadowbuffer.end(),
+              -std::numeric_limits<float>::max());
+}
 
 IShader::~IShader() {}
 
@@ -42,8 +58,13 @@ void lookat(Vec3f eye, Vec3f center, Vec3f up)
         ModelView[0][i] = x[i];
         ModelView[1][i] = y[i];
         ModelView[2][i] = z[i];
-        ModelView[i][3] = -center[i];
     }
+    // the translation is -R*center, not -center. those agree only when center
+    // is the origin; any other target lands geometry at the wrong camera-space
+    // depth, giving negative w.
+    ModelView[0][3] = -(x * center);
+    ModelView[1][3] = -(y * center);
+    ModelView[2][3] = -(z * center);
 }
 // baryentric coordinates are calcualted using cross product methjod
 // determines how much each vertex contributes to point p
@@ -116,15 +137,27 @@ void triangle(Vec4f *pts, IShader &shader, TGAImage &image, TGAImage &zbuffer)
     {
         for (P.y = bboxmin.y; P.y <= bboxmax.y; P.y++)
         {
-            Vec3f c = barycentric(screen_coords[0], screen_coords[1], screen_coords[2], proj<2>(P));
-            float z = pts[0][2] * c.x + pts[1][2] * c.y + pts[2][2] * c.z;
-            float w = pts[0][3] * c.x + pts[1][3] * c.y + pts[2][3] * c.z;
+            Vec3f screen_bar = barycentric(screen_coords[0], screen_coords[1], screen_coords[2], proj<2>(P));
+            float z = pts[0][2] * screen_bar.x + pts[1][2] * screen_bar.y + pts[2][2] * screen_bar.z;
+            float w = pts[0][3] * screen_bar.x + pts[1][3] * screen_bar.y + pts[2][3] * screen_bar.z;
             int frag_depth = std::max(0, std::min(255, int(z / w + .5)));
 
-            if (c.x < 0 || c.y < 0 || c.z < 0 || zbuffer.get(P.x, P.y)[0] > frag_depth)
+            if (screen_bar.x < 0 || screen_bar.y < 0 || screen_bar.z < 0 || zbuffer.get(P.x, P.y)[0] > frag_depth)
                 continue;
 
-            bool discard = shader.fragment(c, color);
+            Vec3f persp_bar(-1, 1, 1);
+            float inv_w0 = 1.0f / pts[0][3];
+            float inv_w1 = 1.0f / pts[1][3];
+            float inv_w2 = 1.0f / pts[2][3];
+            float denom = screen_bar.x * inv_w0 + screen_bar.y * inv_w1 + screen_bar.z * inv_w2;
+            if (std::abs(denom) > 1e-12f)
+            {
+                persp_bar = Vec3f(screen_bar.x * inv_w0,
+                                  screen_bar.y * inv_w1,
+                                  screen_bar.z * inv_w2) * (1.0f / denom);
+            }
+
+            bool discard = shader.fragment(screen_bar, persp_bar, color);
             if (!discard)
             {
                 zbuffer.set(P.x, P.y, TGAColor(frag_depth));

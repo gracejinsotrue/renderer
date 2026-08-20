@@ -269,6 +269,22 @@ public:
         T tmp = ret[0] * rows[0]; // determinan
         return ret / tmp;         // adjaent/determinant
     }
+
+    mat<DimCols, DimRows, T> transpose() const
+    {
+        mat<DimCols, DimRows, T> ret;
+        for (size_t i = DimRows; i--;)
+            for (size_t j = DimCols; j--;)
+                ret[j][i] = rows[i][j];
+        return ret;
+    }
+
+    // the true inverse. NOTE adjugate() above returns the COFACTOR matrix,
+    // not its transpose, so adjugate()/det() is the inverse-TRANSPOSE.
+    mat<DimRows, DimCols, T> invert()
+    {
+        return invert_transpose().transpose();
+    }
 };
 
 /////////////////////////////////////////////////////////////////////////////////

@@ -10,3 +10,17 @@
 unified_engine
 *.a
 
+memory.md
+
+# compiled test binaries
+src/tests/bin/
+
+# local-only benchmarking and inspection tools. these measure or render for
+# eyeballing rather than asserting, so they stay out of the repo. `make tools`
+# builds whichever of them are present.
+src/tests/bench.cpp
+src/tests/bench_cull.cpp
+src/tests/bench_tile.cpp
+src/tests/profile_frame.cpp
+src/tests/render_png.cpp
+src/tests/test_wind.cpp

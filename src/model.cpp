@@ -4,7 +4,74 @@
 #include <cmath>
 #include "model.h"
 
-Model::Model(const char *filename) : verts_(), faces_(), norms_(), uv_(), diffusemap_(), normalmap_(), specularmap_(), hasBackup_(false)
+Model::TextureFilterMode Model::textureFilterMode_ = Model::FILTER_LINEAR;
+
+static float clamp01(float v)
+{
+    return std::max(0.0f, std::min(1.0f, v));
+}
+
+static TGAColor sampleBilinear(TGAImage &img, Vec2f uvf)
+{
+    int w = img.get_width();
+    int h = img.get_height();
+    if (w <= 0 || h <= 0)
+        return TGAColor();
+
+    float u = clamp01(uvf[0]);
+    float v = clamp01(uvf[1]);
+
+    // Match normalized linear texture lookup: uv=0/1 clamps to the texture
+    // edge, while interior samples blend around texel centres.
+    float fx = u * w - 0.5f;
+    float fy = v * h - 0.5f;
+    int x0 = (int)std::floor(fx);
+    int y0 = (int)std::floor(fy);
+    float tx = fx - x0;
+    float ty = fy - y0;
+
+    int x1 = x0 + 1;
+    int y1 = y0 + 1;
+    x0 = std::max(0, std::min(w - 1, x0));
+    y0 = std::max(0, std::min(h - 1, y0));
+    x1 = std::max(0, std::min(w - 1, x1));
+    y1 = std::max(0, std::min(h - 1, y1));
+
+    TGAColor c00 = img.get(x0, y0);
+    TGAColor c10 = img.get(x1, y0);
+    TGAColor c01 = img.get(x0, y1);
+    TGAColor c11 = img.get(x1, y1);
+    TGAColor out;
+    out.bytespp = c00.bytespp;
+    for (int i = 0; i < out.bytespp; i++)
+    {
+        float top = c00[i] * (1.0f - tx) + c10[i] * tx;
+        float bot = c01[i] * (1.0f - tx) + c11[i] * tx;
+        out[i] = (unsigned char)std::min(255.0f, std::max(0.0f, top * (1.0f - ty) + bot * ty));
+    }
+    return out;
+}
+
+static TGAColor sampleNearest(TGAImage &img, Vec2f uvf)
+{
+    int w = img.get_width();
+    int h = img.get_height();
+    if (w <= 0 || h <= 0)
+        return TGAColor();
+    float u = clamp01(uvf[0]);
+    float v = clamp01(uvf[1]);
+    int x = std::max(0, std::min(w - 1, (int)(u * w)));
+    int y = std::max(0, std::min(h - 1, (int)(v * h)));
+    return img.get(x, y);
+}
+
+static TGAColor sampleTexture(TGAImage &img, Vec2f uvf)
+{
+    return Model::usesLinearTextureFiltering() ? sampleBilinear(img, uvf)
+                                               : sampleNearest(img, uvf);
+}
+
+Model::Model(const char *filename) : verts_(), faces_(), norms_(), uv_(), diffusemap_(), normalmap_(), specularmap_(), hasBackup_(false), geomVersion_(0)
 {
     std::ifstream in;
     in.open(filename, std::ifstream::in);
@@ -107,14 +174,12 @@ void Model::load_texture(std::string filename, const char *suffix, TGAImage &img
 
 TGAColor Model::diffuse(Vec2f uvf)
 {
-    Vec2i uv(uvf[0] * diffusemap_.get_width(), uvf[1] * diffusemap_.get_height());
-    return diffusemap_.get(uv[0], uv[1]);
+    return sampleTexture(diffusemap_, uvf);
 }
 
 Vec3f Model::normal(Vec2f uvf)
 {
-    Vec2i uv(uvf[0] * normalmap_.get_width(), uvf[1] * normalmap_.get_height());
-    TGAColor c = normalmap_.get(uv[0], uv[1]);
+    TGAColor c = sampleTexture(normalmap_, uvf);
     Vec3f res;
     for (int i = 0; i < 3; i++)
         res[2 - i] = (float)c[i] / 255.f * 2.f - 1.f;
@@ -128,8 +193,17 @@ Vec2f Model::uv(int iface, int nthvert)
 
 float Model::specular(Vec2f uvf)
 {
-    Vec2i uv(uvf[0] * specularmap_.get_width(), uvf[1] * specularmap_.get_height());
-    return specularmap_.get(uv[0], uv[1])[0] / 1.f;
+    return sampleTexture(specularmap_, uvf)[0] / 1.f;
+}
+
+void Model::setLinearTextureFiltering(bool enabled)
+{
+    textureFilterMode_ = enabled ? FILTER_LINEAR : FILTER_POINT;
+}
+
+bool Model::usesLinearTextureFiltering()
+{
+    return textureFilterMode_ == FILTER_LINEAR;
 }
 
 Vec3f Model::normal(int iface, int nthvert)
@@ -144,6 +218,7 @@ void Model::setVertex(int i, const Vec3f &newPos)
     if (i >= 0 && i < verts_.size())
     {
         verts_[i] = newPos;
+        geomVersion_++;
     }
 }
 
@@ -159,6 +234,7 @@ void Model::updateVertex(int index, const Vec3f &offset)
     if (index >= 0 && index < verts_.size())
     {
         verts_[index] = verts_[index] + offset;
+        geomVersion_++;
     }
 }
 
@@ -167,6 +243,7 @@ void Model::resetVertices()
     if (hasBackup_)
     {
         verts_ = originalVerts_;
+        geomVersion_++;
     }
 }
 
@@ -182,6 +259,7 @@ void Model::restoreOriginalVertices()
     if (hasBackup_)
     {
         verts_ = originalVerts_;
+        geomVersion_++;
         std::cout << "Restored original vertices" << std::endl;
     }
 }
@@ -237,6 +315,7 @@ void Model::applyBlendShapes()
         }
     }
 
+    geomVersion_++;
     std::cout << "Applied blend shapes to " << verts_.size() << " vertices" << std::endl;
 }
 // TODO: clear up this these tests now tha we know this works
