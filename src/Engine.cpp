@@ -516,14 +516,7 @@ void Engine::handleEvents()
             case SDLK_ESCAPE:
                 if (vertexEditMode)
                 {
-                    if (vertexEditor.getMode() == VertexEditor::BLEND_SHAPE_CREATE)
-                    {
-                        cancelBlendShape();
-                    }
-                    else
-                    {
-                        exitVertexEditMode();
-                    }
+                    exitVertexEditMode();
                 }
                 else
                 {
@@ -543,19 +536,6 @@ void Engine::handleEvents()
                 std::cout << "Frame captured!" << std::endl;
                 break;
             case SDLK_b:
-                if (vertexEditMode)
-                {
-                    // start blend shape recording
-                    std::cout << "Enter blend shape name: ";
-                    std::string name;
-                    std::getline(std::cin, name);
-                    if (!name.empty())
-                    {
-                        vertexEditor.setMode(VertexEditor::BLEND_SHAPE_CREATE);
-                        startRecordingBlendShape(name);
-                    }
-                }
-                else
                 {
                     scene.loadBackground("background.tga");
                 }
@@ -642,55 +622,11 @@ void Engine::handleEvents()
                 {
                     vertexEditor.setMode(VertexEditor::VERTEX_SELECT);
                 }
-                else
-                {
-                    // Keep existing F1 functionality for blend shape tests
-                    SceneNode *selected = scene.getSelectedNode();
-                    if (selected && selected->hasModel())
-                    {
-                        selected->model->createTestBlendShapes();
-                        std::cout << "Created test blend shapes for " << selected->name << std::endl;
-                    }
-                    else
-                    {
-                        std::cout << "Select a model first (TAB to cycle through objects)" << std::endl;
-                    }
-                }
                 break;
             case SDLK_2:
                 if (vertexEditMode)
                 {
                     vertexEditor.setMode(VertexEditor::VERTEX_DEFORM);
-                }
-                else
-                {
-                    // Keep existing F2 functionality
-                    SceneNode *selected = scene.getSelectedNode();
-                    if (selected && selected->hasModel())
-                    {
-                        static float expandWeight = 0.0f;
-                        expandWeight = (expandWeight >= 1.0f) ? 0.0f : expandWeight + 0.2f;
-                        selected->model->setBlendWeight("expand", expandWeight);
-                        selected->model->applyBlendShapes();
-                    }
-                }
-                break;
-            case SDLK_3:
-                if (vertexEditMode)
-                {
-                    vertexEditor.setMode(VertexEditor::BLEND_SHAPE_CREATE);
-                }
-                else
-                {
-                    // Keep existing F3 functionality
-                    SceneNode *selected = scene.getSelectedNode();
-                    if (selected && selected->hasModel())
-                    {
-                        static float squashWeight = 0.0f;
-                        squashWeight = (squashWeight >= 1.0f) ? 0.0f : squashWeight + 0.2f;
-                        selected->model->setBlendWeight("squash", squashWeight);
-                        selected->model->applyBlendShapes();
-                    }
                 }
                 break;
 
@@ -703,14 +639,7 @@ void Engine::handleEvents()
             case SDLK_s:
                 if (vertexEditMode && !keys[SDL_SCANCODE_LCTRL])
                 {
-                    if (vertexEditor.getMode() == VertexEditor::BLEND_SHAPE_CREATE)
-                    {
-                        saveCurrentBlendShape();
-                    }
-                    else
-                    {
-                        vertexEditor.printStatus();
-                    }
+                    vertexEditor.printStatus();
                 }
                 break;
             case SDLK_r:
@@ -737,112 +666,14 @@ void Engine::handleEvents()
                 }
                 break;
 
-            // ===== ORIGINAL F-KEY TEST CONTROLS =====
-            case SDLK_F1:
-                // Test: Create blend shapes for selected model
-                {
-                    SceneNode *selected = scene.getSelectedNode();
-                    if (selected && selected->hasModel())
-                    {
-                        selected->model->createTestBlendShapes();
-                        std::cout << "Created test blend shapes for " << selected->name << std::endl;
-                    }
-                    else
-                    {
-                        std::cout << "Select a model first (TAB to cycle through objects)" << std::endl;
-                    }
-                }
-                break;
-
-            case SDLK_F2:
-                // Test: Animate "expand" blend shape
-                {
-                    SceneNode *selected = scene.getSelectedNode();
-                    if (selected && selected->hasModel())
-                    {
-                        static float expandWeight = 0.0f;
-                        expandWeight = (expandWeight >= 1.0f) ? 0.0f : expandWeight + 0.2f;
-                        selected->model->setBlendWeight("expand", expandWeight);
-                        selected->model->applyBlendShapes();
-                    }
-                }
-                break;
-
-            case SDLK_F3:
-                // Test: Animate "squash" blend shape
-                {
-                    SceneNode *selected = scene.getSelectedNode();
-                    if (selected && selected->hasModel())
-                    {
-                        static float squashWeight = 0.0f;
-                        squashWeight = (squashWeight >= 1.0f) ? 0.0f : squashWeight + 0.2f;
-                        selected->model->setBlendWeight("squash", squashWeight);
-                        selected->model->applyBlendShapes();
-                    }
-                }
-                break;
-
-            case SDLK_F4:
-                // Test: Animate "twist" blend shape
-                {
-                    SceneNode *selected = scene.getSelectedNode();
-                    if (selected && selected->hasModel())
-                    {
-                        static float twistWeight = 0.0f;
-                        twistWeight = (twistWeight >= 1.0f) ? 0.0f : twistWeight + 0.2f;
-                        selected->model->setBlendWeight("twist", twistWeight);
-                        selected->model->applyBlendShapes();
-                    }
-                }
-                break;
-
             case SDLK_F5:
-                // Reset all deformations
+                // undo every sculpt on the selected mesh
                 {
                     SceneNode *selected = scene.getSelectedNode();
                     if (selected && selected->hasModel())
                     {
                         selected->model->restoreOriginalVertices();
                         std::cout << "Reset " << selected->name << " to original shape" << std::endl;
-                    }
-                }
-                break;
-            case SDLK_F6:
-                // List all saved blend shapes
-                listSavedBlendShapes();
-                break;
-
-            case SDLK_F7:
-                // Clear all expressions (return to neutral)
-                clearAllExpressions();
-                break;
-
-            case SDLK_F8:
-                // Cycle to next saved expression
-                cycleToNextExpression();
-                break;
-
-            case SDLK_F9:
-                // Cycle to previous saved expression
-                cycleToPreviousExpression();
-                break;
-
-            case SDLK_F10:
-                // Quick test: blend between first two expressions
-                {
-                    updateAvailableExpressions();
-                    if (availableExpressions.size() >= 2)
-                    {
-                        static float blendAmount = 0.0f;
-                        blendAmount += 0.25f;
-                        if (blendAmount > 1.0f)
-                            blendAmount = 0.0f;
-
-                        blendExpressions(availableExpressions[0], availableExpressions[1], blendAmount);
-                    }
-                    else
-                    {
-                        std::cout << "Need at least 2 saved expressions to blend!" << std::endl;
                     }
                 }
                 break;
@@ -1898,11 +1729,6 @@ void Engine::VertexEditor::setMode(EditMode mode)
         std::cout << "VERTEX DEFORM MODE - Drag selected vertices to sculpt the mesh" << std::endl;
         std::cout << "Use +/- keys to adjust deformation strength." << std::endl;
         break;
-    case BLEND_SHAPE_CREATE:
-        showVertices = true;
-        std::cout << "BLEND SHAPE MODE - Sculpt the face, then save as expression" << std::endl;
-        std::cout << "Press B to start recording, S to save, Esc to cancel." << std::endl;
-        break;
     }
 }
 
@@ -2065,7 +1891,6 @@ void Engine::VertexEditor::handleMouseClick(int mouseX, int mouseY, const Matrix
         break;
     }
     case VERTEX_DEFORM:
-    case BLEND_SHAPE_CREATE:
     {
         if (!selectedVertices.empty())
         {
@@ -2100,7 +1925,7 @@ void Engine::VertexEditor::handleMouseDrag(int mouseX, int mouseY, int deltaX, i
 void Engine::VertexEditor::handleMouseRelease()
 {
     isDragging = false;
-    if (currentMode == VERTEX_DEFORM || currentMode == BLEND_SHAPE_CREATE)
+    if (currentMode == VERTEX_DEFORM)
     {
         endDeformation();
     }
@@ -2126,42 +1951,6 @@ void Engine::VertexEditor::resetDeformation()
     std::cout << "Reset vertices to original positions" << std::endl;
 }
 
-void Engine::VertexEditor::startBlendShape(const std::string &name)
-{
-    if (!targetModel)
-        return;
-
-    currentBlendShapeName = name;
-    blendShapeStart = targetModel->getVertices();
-    recordingBlendShape = true;
-
-    std::cout << "Recording blend shape: '" << name << "'" << std::endl;
-    std::cout << "Sculpt your expression, then press 'S' to save or 'Esc' to cancel" << std::endl;
-}
-
-void Engine::VertexEditor::saveBlendShape()
-{
-    if (!recordingBlendShape || !targetModel)
-        return;
-
-    std::vector<Vec3f> currentVertices = targetModel->getVertices();
-    targetModel->addBlendShape(currentBlendShapeName, currentVertices);
-
-    recordingBlendShape = false;
-    std::cout << "Saved blend shape: '" << currentBlendShapeName << "'" << std::endl;
-}
-
-void Engine::VertexEditor::cancelBlendShape()
-{
-    if (!recordingBlendShape)
-        return;
-
-    // Restore to state when recording started
-    targetModel->restoreOriginalVertices();
-    recordingBlendShape = false;
-    std::cout << "Cancelled blend shape: '" << currentBlendShapeName << "'" << std::endl;
-}
-
 void Engine::VertexEditor::printStatus() const
 {
     std::cout << "\n=== VERTEX EDITOR STATUS ===" << std::endl;
@@ -2177,9 +1966,6 @@ void Engine::VertexEditor::printStatus() const
     case VERTEX_DEFORM:
         std::cout << "VERTEX DEFORM";
         break;
-    case BLEND_SHAPE_CREATE:
-        std::cout << "BLEND SHAPE CREATE";
-        break;
     }
     std::cout << std::endl;
 
@@ -2190,11 +1976,6 @@ void Engine::VertexEditor::printStatus() const
         std::cout << "Selection radius: " << selectionRadius << std::endl;
         std::cout << "Deformation strength: " << deformationStrength << std::endl;
         std::cout << "Deformation radius: " << deformationRadius << std::endl;
-
-        if (recordingBlendShape)
-        {
-            std::cout << "Recording blend shape: '" << currentBlendShapeName << "'" << std::endl;
-        }
     }
     else
     {
@@ -2261,21 +2042,6 @@ void Engine::setSelectionRadius(float radius)
     std::cout << "Selection radius: " << vertexEditor.getSelectionRadius() << std::endl;
 }
 
-void Engine::startRecordingBlendShape(const std::string &name)
-{
-    vertexEditor.startBlendShape(name);
-}
-
-void Engine::saveCurrentBlendShape()
-{
-    vertexEditor.saveBlendShape();
-}
-
-void Engine::cancelBlendShape()
-{
-    vertexEditor.cancelBlendShape();
-}
-
 void Engine::VertexEditor::renderVertexOverlay(TGAImage &framebuffer, int renderWidth, int renderHeight)
 {
     if (!targetModel || !showVertices)
@@ -2319,109 +2085,4 @@ void Engine::VertexEditor::renderVertexOverlay(TGAImage &framebuffer, int render
             }
         }
     }
-}
-
-// Enhanced blend shape playback methods
-void Engine::listSavedBlendShapes()
-{
-    SceneNode *selected = scene.getSelectedNode();
-    if (!selected || !selected->hasModel())
-    {
-        std::cout << "Select a model first to view its blend shapes" << std::endl;
-        return;
-    }
-
-    selected->model->listBlendShapes();
-}
-
-void Engine::triggerExpression(const std::string &name, float intensity)
-{
-    SceneNode *selected = scene.getSelectedNode();
-    if (!selected || !selected->hasModel())
-    {
-        std::cout << "Select a model first to trigger expressions" << std::endl;
-        return;
-    }
-
-    selected->model->setExpressionByName(name, intensity);
-}
-
-void Engine::clearAllExpressions()
-{
-    SceneNode *selected = scene.getSelectedNode();
-    if (!selected || !selected->hasModel())
-    {
-        std::cout << "Select a model first" << std::endl;
-        return;
-    }
-
-    selected->model->clearAllBlendWeights();
-}
-
-void Engine::updateAvailableExpressions()
-{
-    SceneNode *selected = scene.getSelectedNode();
-    if (!selected || !selected->hasModel())
-    {
-        availableExpressions.clear();
-        return;
-    }
-
-    availableExpressions = selected->model->getBlendShapeNames();
-    if (currentExpressionIndex >= availableExpressions.size())
-    {
-        currentExpressionIndex = 0;
-    }
-}
-
-void Engine::cycleToNextExpression()
-{
-    updateAvailableExpressions();
-
-    if (availableExpressions.empty())
-    {
-        std::cout << "No saved expressions found. Create some first!" << std::endl;
-        return;
-    }
-
-    currentExpressionIndex = (currentExpressionIndex + 1) % availableExpressions.size();
-    std::string currentExpr = availableExpressions[currentExpressionIndex];
-
-    triggerExpression(currentExpr, 1.0f);
-    std::cout << "Cycling expressions: [" << (currentExpressionIndex + 1)
-              << "/" << availableExpressions.size() << "] " << currentExpr << std::endl;
-}
-
-void Engine::cycleToPreviousExpression()
-{
-    updateAvailableExpressions();
-
-    if (availableExpressions.empty())
-    {
-        std::cout << "No saved expressions found. Create some first!" << std::endl;
-        return;
-    }
-
-    currentExpressionIndex--;
-    if (currentExpressionIndex < 0)
-    {
-        currentExpressionIndex = availableExpressions.size() - 1;
-    }
-
-    std::string currentExpr = availableExpressions[currentExpressionIndex];
-    triggerExpression(currentExpr, 1.0f);
-    std::cout << "Cycling expressions: [" << (currentExpressionIndex + 1)
-              << "/" << availableExpressions.size() << "] " << currentExpr << std::endl;
-}
-
-void Engine::blendExpressions(const std::string &expr1, const std::string &expr2, float blend)
-{
-    SceneNode *selected = scene.getSelectedNode();
-    if (!selected || !selected->hasModel())
-    {
-        std::cout << "Select a model first" << std::endl;
-        return;
-    }
-
-    selected->model->blendBetweenExpressions(expr1, expr2, blend);
 }

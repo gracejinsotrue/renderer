@@ -144,7 +144,7 @@ int main(int argc, char **argv)
 
     printf("\n--- deformation invalidates the cached GPU mesh\n");
     // this is the regression: geometry was uploaded once and never refreshed,
-    // so sculpting and blend shapes had no effect on the CUDA path
+    // so sculpting had no effect on the CUDA path
     Model *m = a->model;
     m->backupOriginalVertices();
     for (int i = 0; i < m->nverts(); i++)
@@ -157,18 +157,16 @@ int main(int argc, char **argv)
     FrameStat f6 = renderAndStat(engine);
     check(f6.hash == f4.hash, "restoring vertices restores the frame exactly");
 
-    // and again through the blend-shape path the expression system uses
-    std::vector<Vec3f> target = m->getVertices();
-    for (size_t i = 0; i < target.size(); i++)
-        target[i] = target[i] + Vec3f(0.06f, 0.f, 0.f);
-    m->addBlendShape("t", target);
-    m->setExpressionByName("t", 1.0f);
+    // and again through updateVertex, the offset-based mutator the sculpt
+    // drag goes through, since it bumps the version by a different route
+    for (int i = 0; i < m->nverts(); i++)
+        m->updateVertex(i, Vec3f(0.06f, 0.f, 0.f));
     FrameStat f7 = renderAndStat(engine);
-    check(f7.hash != f6.hash, "blend shape changes the CUDA frame");
+    check(f7.hash != f6.hash, "updateVertex changes the CUDA frame");
 
-    m->clearAllBlendWeights();
+    m->restoreOriginalVertices();
     FrameStat f8 = renderAndStat(engine);
-    check(f8.hash == f6.hash, "clearing the expression restores the frame");
+    check(f8.hash == f6.hash, "restoring after updateVertex restores the frame");
 
     printf("\n--- light controls affect both render paths\n");
     Scene &scene = engine.getScene();

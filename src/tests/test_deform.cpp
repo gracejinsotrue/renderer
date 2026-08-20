@@ -2,7 +2,7 @@
 //
 // stage 2 started caching each model's geometry on the device, keyed by
 // Model*, and uploaded it exactly once. nothing invalidated that cache, so
-// after a sculpt or a blend shape the GPU kept drawing the original mesh.
+// after a sculpt the GPU kept drawing the original mesh.
 // this covers both halves of the fix:
 //   part 1 - Model::geometryVersion() changes on every write to verts_
 //   part 2 - cudaUpdateMeshVerts re-uploads positions correctly, i.e. an
@@ -58,14 +58,10 @@ static void testVersionCounter(Model& m) {
     m.resetVertices();
     check(m.geometryVersion() != v4, "resetVertices bumps");
 
-    // blend shapes go through applyBlendShapes, the path the expression
-    // system uses
-    std::vector<Vec3f> target = m.getVertices();
-    for (size_t i = 0; i < target.size(); i++) target[i] = target[i] + Vec3f(0, 0.05f, 0);
-    m.addBlendShape("test_shape", target);
+    // updateVertex is the offset-based mutator the sculpt drag uses
     unsigned int v5 = m.geometryVersion();
-    m.setExpressionByName("test_shape", 1.0f);
-    check(m.geometryVersion() != v5, "setExpressionByName bumps (via applyBlendShapes)");
+    m.updateVertex(0, Vec3f(0.f, 0.05f, 0.f));
+    check(m.geometryVersion() != v5, "updateVertex bumps");
 
     // reading must not bump - otherwise every frame re-uploads
     unsigned int v6 = m.geometryVersion();

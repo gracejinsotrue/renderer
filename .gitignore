@@ -10,6 +10,7 @@
 *.d
 unified_engine
 *.a
+__pycache__/
 
 memory.md
 

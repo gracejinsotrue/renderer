@@ -112,8 +112,7 @@ private:
         {
             NORMAL,
             VERTEX_SELECT,
-            VERTEX_DEFORM,
-            BLEND_SHAPE_CREATE
+            VERTEX_DEFORM
         };
 
     private:
@@ -135,9 +134,6 @@ private:
         bool isDeforming;
 
         // blend shape creation
-        std::string currentBlendShapeName;
-        bool recordingBlendShape;
-        std::vector<Vec3f> blendShapeStart;
 
         // mouse interaction
         Vec3f lastMouseWorldPos;
@@ -148,7 +144,7 @@ private:
         VertexEditor() : currentMode(NORMAL), targetModel(nullptr), targetNode(nullptr),
                          showVertices(false), vertexSize(3.0f), selectionRadius(0.05f),
                          deformationRadius(0.1f), deformationStrength(0.1f), isDeforming(false),
-                         recordingBlendShape(false), isDragging(false),
+                         isDragging(false),
                          lastMouseX(0), lastMouseY(0) {}
 
         void setTargetModel(SceneNode *node);
@@ -170,9 +166,6 @@ private:
         void resetDeformation();
 
         // Blend shape creation
-        void startBlendShape(const std::string &name);
-        void saveBlendShape();
-        void cancelBlendShape();
 
         // Mouse handling
         void handleMouseClick(int mouseX, int mouseY, const Matrix &viewMatrix,
@@ -211,10 +204,6 @@ private:
     VertexEditor vertexEditor;
     bool vertexEditMode;
 
-    // expression cycling state
-    int currentExpressionIndex;
-    std::vector<std::string> availableExpressions;
-    void updateAvailableExpressions();
 
 public:
     Engine(int winWidth = 1024, int winHeight = 768, int renWidth = 800, int renHeight = 800);
@@ -286,17 +275,8 @@ public:
     void resetVertexDeformation();
 
     // blend shape tools
-    void startRecordingBlendShape(const std::string &name);
-    void saveCurrentBlendShape();
-    void cancelBlendShape();
 
     // blend shape playback
-    void listSavedBlendShapes();
-    void triggerExpression(const std::string &name, float intensity = 1.0f);
-    void clearAllExpressions();
-    void cycleToNextExpression();
-    void cycleToPreviousExpression();
-    void blendExpressions(const std::string &expr1, const std::string &expr2, float blend);
 
     // utility
     void updateWindowTitle();
