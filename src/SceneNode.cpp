@@ -55,13 +55,11 @@ SceneNode::SceneNode(const std::string &nodeName, NodeType type)
       model(nullptr), nodeType(type)
 {
 
-    std::cout << "Created SceneNode: " << name << " (type: " << type << ")" << std::endl;
 }
 
 SceneNode::~SceneNode()
 {
     // don't delete model here - the scene manages Model lifetime
-    std::cout << "Destroying SceneNode: " << name << std::endl;
 }
 
 void SceneNode::addChild(std::unique_ptr<SceneNode> child)
@@ -70,7 +68,6 @@ void SceneNode::addChild(std::unique_ptr<SceneNode> child)
         return;
 
     child->parent = this;
-    std::cout << "Adding child '" << child->name << "' to '" << name << "'" << std::endl;
     children.push_back(std::move(child));
 }
 
@@ -198,7 +195,6 @@ void SceneNode::attachModel(Model *modelPtr)
 {
     model = modelPtr;
     nodeType = MESH;
-    std::cout << "Attached model to node '" << name << "'" << std::endl;
 }
 
 void SceneNode::printHierarchy(int depth) const

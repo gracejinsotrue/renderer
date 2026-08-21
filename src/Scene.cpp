@@ -42,7 +42,6 @@ void Camera::lookAt(Vec3f eye, Vec3f center, Vec3f up_vec)
 Scene::Scene() : selectedNode(nullptr), nodeCounter(0), background(nullptr)
 {
     rootNode = std::make_unique<SceneNode>("Root", SceneNode::EMPTY);
-    std::cout << "Scene created with root node" << std::endl;
 }
 
 Scene::~Scene()
@@ -53,7 +52,6 @@ Scene::~Scene()
 
 SceneNode *Scene::loadModel(const std::string &objPath, const std::string &nodeName)
 {
-    std::cout << "Loading model: " << objPath << std::endl;
 
     // create unique model if not already loaded
     auto modelIt = loadedModels.find(objPath);
@@ -66,7 +64,8 @@ SceneNode *Scene::loadModel(const std::string &objPath, const std::string &nodeN
             return nullptr;
         }
         loadedModels[objPath] = std::move(model);
-        std::cout << "Model loaded with " << loadedModels[objPath]->nverts() << " vertices" << std::endl;
+        std::cout << "Loaded " << objPath << "  " << loadedModels[objPath]->nverts()
+                  << " verts, " << loadedModels[objPath]->nfaces() << " faces" << std::endl;
     }
 
     // generate node name
@@ -81,7 +80,6 @@ SceneNode *Scene::loadModel(const std::string &objPath, const std::string &nodeN
     SceneNode *nodePtr = meshNode.get();
     rootNode->addChild(std::move(meshNode));
 
-    std::cout << "Created mesh node: " << finalName << std::endl;
     return nodePtr;
 }
 

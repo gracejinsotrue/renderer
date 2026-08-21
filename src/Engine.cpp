@@ -77,36 +77,53 @@ bool Engine::init()
 
     // remove debugging later
 
-    std::cout << "Multi-Object Engine initialized successfully!" << std::endl;
-    std::cout << "\n=== MULTI-OBJECT CONTROLS ===" << std::endl;
-    std::cout << "  TAB - Select next object" << std::endl;
-    std::cout << "  SHIFT+TAB - Select previous object" << std::endl;
-    std::cout << "  X - Delete selected object" << std::endl;
-    std::cout << "  SHIFT+D - Duplicate selected object" << std::endl;
-    std::cout << "  L - Load new model (test3.obj)" << std::endl;
-    std::cout << "  N - Create empty node" << std::endl;
-    std::cout << "  I - Print scene hierarchy" << std::endl;
+    std::cout << "Engine ready." << std::endl;
+
+    std::cout << "\n=== SCENE ===" << std::endl;
+    std::cout << "  TAB / SHIFT+TAB - Select next / previous object" << std::endl;
+    std::cout << "  X               - Delete selected object" << std::endl;
+    std::cout << "  SHIFT+D         - Duplicate selected object" << std::endl;
+    std::cout << "  N               - Create empty node" << std::endl;
+    std::cout << "  L               - Load a model" << std::endl;
+    std::cout << "  I               - Print scene hierarchy" << std::endl;
+
     std::cout << "\n=== TRANSFORM SELECTED OBJECT ===" << std::endl;
-    std::cout << "  CTRL + Numpad - Move object (4/6=X, 8/2=Z, +/-=Y)" << std::endl;
-    std::cout << "  ALT + Numpad - Rotate object (4/6=Y, 8/2=X, 7/9=Z)" << std::endl;
-    std::cout << "  SHIFT + Numpad +/- - Scale object uniformly" << std::endl;
-    std::cout << "\n=== CAMERA CONTROLS ===" << std::endl;
-    std::cout << "  Mouse + Left Click - Orbit/Look around" << std::endl;
-    std::cout << "  Mouse Wheel - Zoom in/out" << std::endl;
-    std::cout << "  WASD - Pan view (orbit mode) / Move camera (free mode)" << std::endl;
-    std::cout << "  Q/E - Move up/down" << std::endl;
-    std::cout << "  R/F - Zoom in/out (alternative to mouse wheel)" << std::endl;
-    std::cout << "  G - Toggle camera mode (Orbit ↔ Free-look)" << std::endl;
-    std::cout << "  H - Reset camera to default position" << std::endl;
-    std::cout << "\n=== OTHER CONTROLS ===" << std::endl;
-    std::cout << "  Arrow keys - Move light source" << std::endl;
-    std::cout << "  F - Toggle wireframe mode" << std::endl;
-    std::cout << "  T - Toggle stats display" << std::endl;
-    std::cout << "  P - Capture frame (output.tga)" << std::endl;
-    std::cout << "  B - Load background image" << std::endl;
-    std::cout << "  C - Clear background" << std::endl;
-    std::cout << "  ESC - Exit" << std::endl;
-    std::cout << "\nDefault: Orbit Camera Mode - Mouse to orbit, WASD to pan, wheel to zoom" << std::endl;
+    std::cout << "  CTRL + Numpad        - Move (4/6=X, 8/2=Z, +/-=Y)" << std::endl;
+    std::cout << "  ALT + Numpad         - Rotate (4/6=Y, 8/2=X, 7/9=Z)" << std::endl;
+    std::cout << "  SHIFT + Numpad +/-   - Scale uniformly" << std::endl;
+
+    std::cout << "\n=== CAMERA ===" << std::endl;
+    std::cout << "  Left drag    - Orbit" << std::endl;
+    std::cout << "  Wheel, R/F   - Zoom" << std::endl;
+    std::cout << "  WASD         - Pan (orbit mode) / move (free-look)" << std::endl;
+    std::cout << "  Q/E          - Up / down" << std::endl;
+    std::cout << "  G            - Orbit or free-look" << std::endl;
+    std::cout << "  H            - Reset camera" << std::endl;
+
+    std::cout << "\n=== MESH EDITING ===" << std::endl;
+    std::cout << "  CTRL+V  - Enter or leave mesh edit mode" << std::endl;
+    std::cout << "  In edit mode:" << std::endl;
+    std::cout << "    1 / 2      - Select mode / deform mode" << std::endl;
+    std::cout << "    Click      - Select vertices within the radius" << std::endl;
+    std::cout << "    Drag       - Sculpt the selected vertices" << std::endl;
+    std::cout << "    Wheel      - Selection radius" << std::endl;
+    std::cout << "    A / C / I  - Select all / clear / invert" << std::endl;
+    std::cout << "    +/-        - Deformation strength" << std::endl;
+    std::cout << "    [ / ]      - Selection radius" << std::endl;
+    std::cout << "    V          - Toggle vertex display" << std::endl;
+    std::cout << "    R          - Reset the mesh" << std::endl;
+    std::cout << "    S          - Print editor status" << std::endl;
+    std::cout << "    ESC        - Leave edit mode" << std::endl;
+    std::cout << "  F5      - Reset the selected mesh to its original shape" << std::endl;
+
+    std::cout << "\n=== RENDERING ===" << std::endl;
+    std::cout << "  K            - CUDA or CPU rasterizer" << std::endl;
+    std::cout << "  F            - Wireframe (in edit mode)" << std::endl;
+    std::cout << "  T            - Stats overlay" << std::endl;
+    std::cout << "  Arrow keys   - Move the light" << std::endl;
+    std::cout << "  P            - Capture frame to output.tga" << std::endl;
+    std::cout << "  B / C        - Load / clear background image" << std::endl;
+    std::cout << "  ESC          - Exit" << std::endl;
 
     cuda_available = initCudaRasterizer(renderWidth, renderHeight);
     // On when the device is there. The two paths agree to a mean byte
@@ -284,7 +301,6 @@ SceneNode *Engine::loadModel(const std::string &filename, const std::string &nod
     SceneNode *node = scene.loadModel(filename, nodeName);
     if (node)
     {
-        std::cout << "Loaded model into scene: " << filename << std::endl;
         // auto-select newly loaded model
         scene.selectNode(node);
     }
