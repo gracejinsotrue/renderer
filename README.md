@@ -31,7 +31,7 @@ interesting technical stuff:
 
 # IMAGES
 
-Ray Tracing example of the food scene from kpop demon hunters
+Rendered example of the food scene from kpop demon hunters
 ![alt text](src/rendered.png)
 
 All the models are made by hand, here is how I did the modelling. 
