@@ -129,17 +129,11 @@ bool Engine::init()
 
 void Engine::zoomCamera(float amount)
 {
-    std::cout << "=== ZOOM DEBUG START ===" << std::endl;
-    std::cout << "zoomCamera called with amount: " << amount << std::endl;
-    std::cout << "orbitMode: " << orbitMode << ", cameraDistance: " << cameraDistance << std::endl;
-
     if (orbitMode)
     {
         // in orbit mode, change distance from target
         cameraDistance += amount;
         cameraDistance = std::max(0.5f, std::min(50.0f, cameraDistance)); // clamp distance
-
-        std::cout << "New cameraDistance: " << cameraDistance << std::endl;
 
         // update camera position based on spherical coordinates
         updateCameraPosition();
@@ -150,7 +144,6 @@ void Engine::zoomCamera(float amount)
         Vec3f forward = (scene.camera.target - scene.camera.position).normalize();
         scene.camera.position = scene.camera.position + forward * amount;
         scene.camera.target = scene.camera.target + forward * amount;
-        std::cout << "Free-look zoom applied" << std::endl;
     }
 }
 void Engine::panCamera(float deltaX, float deltaY)
@@ -201,15 +194,11 @@ void Engine::orbitCamera(float deltaYaw, float deltaPitch)
         while (cameraRotationX > M_PI)
             cameraRotationX -= 2.0f * M_PI;
 
-        std::cout << "Mouse deltas - Yaw: " << deltaYaw << ", Pitch: " << deltaPitch << std::endl;
-        std::cout << "Normalized - X: " << cameraRotationX << ", Y: " << cameraRotationY << std::endl;
-
         updateCameraPosition();
     }
 }
 void Engine::updateCameraPosition()
 {
-    std::cout << "updateCameraPosition() called" << std::endl;
     if (orbitMode)
     {
         // debug the rotation values
@@ -740,19 +729,19 @@ void Engine::handleEvents()
                 int currentX = event.motion.x;
                 int currentY = event.motion.y;
 
-                mouseDeltaX = currentX - lastMouseX;
-                mouseDeltaY = currentY - lastMouseY;
+                // Accumulate. handleEvents() drains every pending event each
+                // frame while updateCamera() consumes the delta once, so
+                // assigning here would keep only the last event's couple of
+                // pixels and throw the rest of the drag away.
+                mouseDeltaX += currentX - lastMouseX;
+                mouseDeltaY += currentY - lastMouseY;
 
                 lastMouseX = currentX;
                 lastMouseY = currentY;
-
-                std::cout << "Manual deltas: " << mouseDeltaX << ", " << mouseDeltaY << std::endl;
             }
             break;
 
         case SDL_MOUSEWHEEL:
-            std::cout << "Mouse wheel event: y=" << event.wheel.y << ", vertexEditMode=" << vertexEditMode << std::endl;
-
             if (vertexEditMode && vertexEditor.getMode() == VertexEditor::VERTEX_SELECT)
             {
                 std::cout << "Adjusting selection radius" << std::endl;
@@ -789,10 +778,7 @@ void Engine::update()
 
     static int frameCount = 0;
     frameCount++;
-    if (frameCount % 30 == 0)
-    { // Every 30 frames
-        std::cout << "Frame " << frameCount << " - FPS: " << getFPS() << std::endl;
-    }
+    // FPS is in the title bar; printing it here just scrolls the log
     // updateCamera();
 
     // update scene transforms
@@ -893,9 +879,6 @@ void Engine::updateCamera()
     // mouse look / orbit
     if (mousePressed && (mouseDeltaX != 0 || mouseDeltaY != 0))
     {
-        std::cout << "Raw mouse deltas: " << mouseDeltaX << ", " << mouseDeltaY << std::endl;
-        // mouseDeltaX = std::max(-50, std::min(50, mouseDeltaX));
-        // mouseDeltaY = std::max(-50, std::min(50, mouseDeltaY));
         if (orbitMode)
         {
             orbitCamera(-mouseDeltaX * mouseSpeed, -mouseDeltaY * mouseSpeed);
