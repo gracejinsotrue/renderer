@@ -1,8 +1,10 @@
-Real-time 3D graphics rendering engine from scratch except the part where i use sdl2. 
+Cool 3D graphics rendering engine from scratch, that implements the whole graphics pipeline, except the part where i use sdl2. The method it uses is rasterization.
 
 Supports multiple 3D objects via scene graph hierarchy. Cool camera too. 
 
 Definitely a work-in-progress passion project meant to teach myself computer graphics  and the heavy math behind it from the ground up (therefore everything is algorithmic). 
+
+I started writing this project in 2025 based off of ssloy's simple graphics renderer project: https://schmittl.github.io/tinyrenderer/ . Now in 2026 I have recently picked it back up, because I think a CPU-based renderer is lame and it's more interesting to port the already-written rendering capabilities to CUDA
 
 GO TO: 
 
@@ -20,10 +22,10 @@ GO TO:
 
 # FEATURES
 interesting technical stuff: 
-1) generic computer graphics scene graph hierarchy: https://en.wikipedia.org/wiki/Scene_graph 
+1) It uses generic computer graphics scene graph hierarchy: https://en.wikipedia.org/wiki/Scene_graph 
 2) For the GPU acceleration aspect of my project, I used Nsight profiling. There exists Nsight profiling with a really easy script: [nsys_easy](src\nsys_easy) that I used sometimes. 
-3) two pass shadow mapping: the first pass renders a depth buffer from the light's perspective with orthographic projection. then, the second pass samples shaodw buffer during fragment shading. then we use an inverse transform to convert between camera space and light space. 
-4) CUDA-accelerated triangle rasterization, tiled. The CPU rasterizer does one triangle at a time on one core, so true. The CUDA path instead keeps each mesh resident on the device and re-uploads vertices only when the geometry actually changes. One kernel transforms a whole mesh and does backface and frustum culling, then the surviving triangles get binned into 16x16 screen tiles (counting kernel, prefix sum, scatter). The raster kernel runs one block per tile and one thread per pixel, so a thread only ever walks the triangles that touch its own tile instead of the whole batch. The frame never comes back to the CPU either: it gets DMA'd straight from device memory into the SDL texture.
+3) two pass shadow mapping: the first pass renders a depth buffer from the light's perspective with orthographic projection. then, the second pass samples shaodw buffer during fragment shading. then we use an inverse transform to convert between camera space and light space. Shading is also just phong shading
+4) CUDA-accelerated triangle rasterization, tiled. The CPU rasterizer does one triangle at a time on one core, so true. The CUDA path instead keeps each mesh resident on the device and re-uploads vertices only when the geometry actually changes. One kernel transforms a whole mesh and does backface and frustum culling, then the surviving triangles get binned into 16x16 screen tiles. The raster kernel runs one block per tile and one thread per pixel, so a thread only ever walks the triangles that touch its own tile instead of the whole batch. The frame never comes back to the CPU either: it gets DMA'd straight from device memory into the SDL texture.
 
 
 
