@@ -38,8 +38,6 @@ bool Engine::init()
         return false;
     }
 
-    // Initialize real-time ray tracer
-
     // window
     window = SDL_CreateWindow("MULTI OBJECT 3D ENGINE THIS BETTER WORK!!!",
                               SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -632,7 +630,6 @@ void Engine::update()
 
     // update scene transforms
     scene.updateAllTransforms();
-    // update rt ray tracer
 
     // object manipulation with keyboard
     float moveSpeed = 2.0f * deltaTime;
@@ -1447,9 +1444,8 @@ int Engine::getCudaMesh(Model *model)
     if (nverts <= 0 || nfaces <= 0)
         return -1;
 
-    // vertices stay indexed so sculpting can re-upload positions alone.
-    // normals and uvs go up unindexed, one set per triangle corner, which
-    // avoids carrying separate vt/vn index arrays.
+    // positions stay indexed; normals and uvs go up unindexed, one set per
+    // triangle corner, which avoids carrying separate vt/vn index arrays.
     std::vector<int> indices(nfaces * 3);
     std::vector<float> cnorms(nfaces * 9);
     std::vector<float> cuvs(nfaces * 6);
@@ -1495,9 +1491,6 @@ int Engine::getCudaMesh(Model *model)
     return handle;
 }
 
-// The rasterizer ignores this; it only changes how the ray tracer shades the
-// object. Marking the tracer dirty rebuilds its scene and restarts the
-// accumulated image, since the old samples used the previous surface.
 void Engine::toggleSSAO()
 {
     ssaoEnabled = !ssaoEnabled;

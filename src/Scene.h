@@ -29,8 +29,7 @@ public:
     // the projection to behave like a pinhole camera standing where this one
     // actually stands. `fov` used to supply it as a fixed -0.8, which
     // describes a camera 1.25 units from the target no matter where the real
-    // one is, and left the rasterized and ray traced images with different
-    // perspective strengths.
+    // one is, so the perspective strength did not track the camera.
     float projectionCoeff() const
     {
         float d = (position - target).norm();

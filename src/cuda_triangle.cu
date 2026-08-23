@@ -1303,8 +1303,8 @@ public:
         }
     }
 
-    // slow path, only when something host-side still needs to composite onto
-    // the frame (vertex overlay, ray trace blend) or we're writing a TGA.
+    // slow path, only for writing a TGA. nothing composites on the host, so
+    // the interactive path never calls this.
     // host_framebuffer is width * height * 3, top-down R,G,B.
     void copyToCPU(unsigned char* host_framebuffer) {
         if (!initialized) return;
