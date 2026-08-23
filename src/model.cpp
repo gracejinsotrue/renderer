@@ -211,7 +211,7 @@ Vec3f Model::normal(int iface, int nthvert)
     return norms_[idx].normalize();
 }
 
-Vec3f *Model::getVertexData()
+const Vec3f *Model::getVertexData() const
 {
     if (verts_.empty())
         return nullptr;

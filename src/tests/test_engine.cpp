@@ -164,8 +164,9 @@ int main(int argc, char **argv)
     check(fLightReset.hash == f4.hash, "restoring light settings restores the CUDA frame");
 
     printf("\n--- both models share one GPU mesh\n");
-    // A and B are the same .obj, so Scene hands back the same Model*, and the
-    // cache is keyed on that: deforming it must move both instances
+    // A and B are the same .obj, so Scene hands back the same Model*. the GPU
+    // mesh cache is keyed on that pointer, so the geometry is uploaded once and
+    // both nodes draw from it.
     check(a->model == b->model, "both nodes share one Model (Scene caches by path)");
 
     printf("\n--- many meshes in one frame\n");

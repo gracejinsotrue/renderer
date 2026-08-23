@@ -46,7 +46,8 @@ public:
     TGAImage &normalMap() { return normalmap_; }
     TGAImage &specularMap() { return specularmap_; }
 
-    // flat positions, for uploading the mesh to the GPU
-    Vec3f *getVertexData();
+    // flat positions, for uploading the mesh to the GPU. const because a
+    // loaded mesh is immutable: nothing edits geometry after the file is read.
+    const Vec3f *getVertexData() const;
 };
 #endif //__MODEL_H__
