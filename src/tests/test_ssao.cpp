@@ -6,6 +6,7 @@
 // The checks below compare a concave region against a convex one, which is the
 // property that actually distinguishes occlusion from a brightness slider.
 #include <cstdio>
+#include <cstdlib>
 #include <algorithm>
 #include "Engine.h"
 
@@ -53,6 +54,12 @@ static long long coverage(TGAImage &img)
 int main(int argc, char **argv)
 {
     const char *path = (argc > 1) ? argv[1] : "../obj/african_head.obj";
+
+    // no window, no GPU presentation. the dummy video driver has no
+    // accelerated renderer and Engine::init asks for SDL_RENDERER_ACCELERATED,
+    // so the software renderer has to be selected too.
+    setenv("SDL_VIDEODRIVER", "dummy", 1);
+    setenv("SDL_RENDER_DRIVER", "software", 1);
 
     Engine engine(1024, 768, 800, 800);
     if (!engine.init()) { printf("engine init failed\n"); return 1; }

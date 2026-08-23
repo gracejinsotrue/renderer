@@ -24,14 +24,6 @@ private:
     TGAImage specularmap_;
     void load_texture(std::string filename, const char *suffix, TGAImage &img);
 
-    // Backup/restore for animation
-    std::vector<Vec3f> originalVerts_; // Backup of original vertices
-    bool hasBackup_;
-
-    // bumped on every write to verts_, so cached copies of the geometry
-    // (notably the GPU-resident mesh in Engine) can tell when they are stale.
-    unsigned int geomVersion_;
-
 public:
     Model(const char *filename);
     ~Model();
@@ -54,14 +46,7 @@ public:
     TGAImage &normalMap() { return normalmap_; }
     TGAImage &specularMap() { return specularmap_; }
 
-    void setVertex(int i, const Vec3f &newPos);
+    // flat positions, for uploading the mesh to the GPU
     Vec3f *getVertexData();
-    unsigned int geometryVersion() const { return geomVersion_; }
-    const std::vector<Vec3f> &getVertices() const { return verts_; }
-    void updateVertex(int index, const Vec3f &offset);
-    void resetVertices(); // Reset to original positions
-
-    void backupOriginalVertices();
-    void restoreOriginalVertices();
 };
 #endif //__MODEL_H__

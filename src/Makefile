@@ -38,7 +38,7 @@ cuda_triangle.o: cuda_triangle.cu geometry.h tgaimage.h
 
 # Standalone GPU tests, see tests/README.md. Run from src/.
 # Regression tests: each asserts and exits non-zero on failure.
-TESTS = test_cull test_blit test_mesh test_deform test_shaded test_frustum
+TESTS = test_cull test_blit test_mesh test_shaded test_frustum
 
 # Local benchmarking and inspection tools. Not part of the regression
 # suite and not tracked in git, so `tools` skips any that are absent.

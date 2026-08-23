@@ -5,7 +5,6 @@
 #include <vector>
 #include <string>
 #include <chrono>
-#include <set>
 #include <unordered_map>
 #include "geometry.h"
 #include "Scene.h" // new scene system!
@@ -38,7 +37,6 @@ extern "C"
     // screen space ambient occlusion over the finished device frame
     void cudaApplySSAO(const float *inv_vp16, const float *vp16,
                        float radius, float intensity, float bias, int debug);
-    void cudaUpdateMeshVerts(int handle, const float *verts, int nverts);
     void cudaDestroyMesh(int handle);
     // mshadow16 may be NULL for an unshadowed draw
     void cudaDrawMesh(int handle, const float *mvp16, const float *clip16,
@@ -71,16 +69,9 @@ private:
     // true when the finished frame still lives only in device memory, so
     // present() can blit it directly instead of going through `framebuffer`
     bool frameOnGPU;
-    // Model -> device mesh. geometry is uploaded once and re-transformed on
-    // the GPU each frame. geomVersion is Model::geometryVersion() as of that
-    // upload; when it diverges the positions are re-sent, so a sculpt or blend
-    // shape never leaves stale geometry on the device.
-    struct CudaMesh
-    {
-        int handle;
-        unsigned int geomVersion;
-    };
-    std::unordered_map<Model *, CudaMesh> cudaMeshes;
+    // Model -> device mesh. meshes are immutable once loaded, so geometry is
+    // uploaded once and only re-transformed on the GPU each frame.
+    std::unordered_map<Model *, int> cudaMeshes;
     int getCudaMesh(Model *model);
 
     // Input state
@@ -92,7 +83,6 @@ private:
 
     // Engine state
     bool running;
-    bool wireframe;
     bool showStats;
 
     // SSAO. radius is in world units, so it scales with the scene rather
@@ -115,104 +105,6 @@ private:
 
 
 
-    class VertexEditor
-    {
-    public:
-        enum EditMode
-        {
-            NORMAL,
-            VERTEX_SELECT,
-            VERTEX_DEFORM
-        };
-
-    private:
-        EditMode currentMode;
-        Model *targetModel;
-        SceneNode *targetNode;
-
-        // selection state
-        std::set<int> selectedVertices;
-        std::vector<Vec3f> selectionColors;
-        bool showVertices;
-        float vertexSize;
-        float selectionRadius;
-
-        // deformation state
-        Vec3f deformationCenter;
-        float deformationRadius;
-        float deformationStrength;
-        bool isDeforming;
-
-        // blend shape creation
-
-        // mouse interaction
-        Vec3f lastMouseWorldPos;
-        bool isDragging;
-        int lastMouseX, lastMouseY;
-
-    public:
-        VertexEditor() : currentMode(NORMAL), targetModel(nullptr), targetNode(nullptr),
-                         showVertices(false), vertexSize(3.0f), selectionRadius(0.05f),
-                         deformationRadius(0.1f), deformationStrength(0.1f), isDeforming(false),
-                         isDragging(false),
-                         lastMouseX(0), lastMouseY(0) {}
-
-        void setTargetModel(SceneNode *node);
-        void setMode(EditMode mode);
-        EditMode getMode() const { return currentMode; }
-
-        // Vertex selection
-        void selectVerticesInRadius(const Vec3f &worldPos, float radius);
-        void addVertexToSelection(int vertexIndex);
-        void removeVertexFromSelection(int vertexIndex);
-        void clearSelection();
-        void selectAll();
-        void invertSelection();
-
-        // Deformation
-        void startDeformation(const Vec3f &center);
-        void applyDeformation(const Vec3f &direction, float strength);
-        void endDeformation();
-        void resetDeformation();
-
-        // Blend shape creation
-
-        // Mouse handling
-        void handleMouseClick(int mouseX, int mouseY, const Matrix &viewMatrix,
-                              const Matrix &projMatrix, int renderWidth, int renderHeight);
-        void handleMouseDrag(int mouseX, int mouseY, int deltaX, int deltaY,
-                             const Matrix &viewMatrix, const Matrix &projMatrix,
-                             int renderWidth, int renderHeight);
-        void handleMouseRelease();
-
-        // Utility
-        Vec3f screenToWorldRay(int screenX, int screenY, const Matrix &viewMatrix,
-                               const Matrix &projMatrix, int renderWidth, int renderHeight);
-        int findClosestVertex(const Vec3f &worldPos, float maxDistance);
-
-        // Settings
-        void setSelectionRadius(float radius) { selectionRadius = std::max(0.01f, std::min(0.5f, radius)); }
-        void setDeformationStrength(float strength) { deformationStrength = std::max(0.001f, std::min(1.0f, strength)); }
-        void setDeformationRadius(float radius) { deformationRadius = std::max(0.01f, std::min(2.0f, radius)); }
-
-        float getSelectionRadius() const { return selectionRadius; }
-        float getDeformationStrength() const { return deformationStrength; }
-        float getDeformationRadius() const { return deformationRadius; }
-
-        // Info
-        void printStatus() const;
-        int getSelectedVertexCount() const { return selectedVertices.size(); }
-        bool hasTarget() const { return targetModel != nullptr; }
-        void toggleVertexDisplay() { showVertices = !showVertices; }
-        bool isShowingVertices() const { return showVertices; }
-
-        void renderSelectionInfo() const;
-
-        void renderVertexOverlay(TGAImage &framebuffer, int renderWidth, int renderHeight);
-    };
-
-    VertexEditor vertexEditor;
-    bool vertexEditMode;
 
 
 public:
@@ -262,31 +154,6 @@ public:
     // Frame capture
     void captureFrame(const std::string &filename);
     void captureSequence(const std::string &baseName, int frameCount, float duration);
-
-    // for ray tracing
-
-
-    // vertex editing interface
-    void enterVertexEditMode();
-    void exitVertexEditMode();
-    void toggleVertexDisplay();
-    void setVertexEditMode(VertexEditor::EditMode mode);
-
-    // selection tools
-    void selectVerticesInRadius(float radius);
-    void clearVertexSelection();
-    void selectAllVertices();
-    void invertVertexSelection();
-
-    // deformation tools
-    void setDeformationStrength(float strength);
-    void setDeformationRadius(float radius);
-    void setSelectionRadius(float radius);
-    void resetVertexDeformation();
-
-    // blend shape tools
-
-    // blend shape playback
 
     // utility
     void updateWindowTitle();

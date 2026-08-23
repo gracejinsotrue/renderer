@@ -11,7 +11,7 @@ Engine::Engine(int winWidth, int winHeight, int renWidth, int renHeight)
     : window(nullptr), sdlRenderer(nullptr), frameTexture(nullptr),
       framebuffer(renWidth, renHeight, TGAImage::RGB), zbuffer(renWidth, renHeight, TGAImage::GRAYSCALE),
       frameOnGPU(false),
-      running(false), wireframe(false), showStats(true),
+      running(false), showStats(true),
       ssaoEnabled(true), ssaoRadius(0.18f), ssaoIntensity(0.85f), ssaoDebug(0),
       windowWidth(winWidth), windowHeight(winHeight), renderWidth(renWidth), renderHeight(renHeight),
       mouseX(0), mouseY(0), mouseDeltaX(0), mouseDeltaY(0), lastMouseX(0), lastMouseY(0), mousePressed(false)
@@ -101,28 +101,11 @@ bool Engine::init()
     std::cout << "  G            - Orbit or free-look" << std::endl;
     std::cout << "  H            - Reset camera" << std::endl;
 
-    std::cout << "\n=== MESH EDITING ===" << std::endl;
-    std::cout << "  CTRL+V  - Enter or leave mesh edit mode" << std::endl;
-    std::cout << "  In edit mode:" << std::endl;
-    std::cout << "    1 / 2      - Select mode / deform mode" << std::endl;
-    std::cout << "    Click      - Select vertices within the radius" << std::endl;
-    std::cout << "    Drag       - Sculpt the selected vertices" << std::endl;
-    std::cout << "    Wheel      - Selection radius" << std::endl;
-    std::cout << "    A / C / I  - Select all / clear / invert" << std::endl;
-    std::cout << "    +/-        - Deformation strength" << std::endl;
-    std::cout << "    [ / ]      - Selection radius" << std::endl;
-    std::cout << "    V          - Toggle vertex display" << std::endl;
-    std::cout << "    R          - Reset the mesh" << std::endl;
-    std::cout << "    S          - Print editor status" << std::endl;
-    std::cout << "    ESC        - Leave edit mode" << std::endl;
-    std::cout << "  F5      - Reset the selected mesh to its original shape" << std::endl;
-
     std::cout << "\n=== RENDERING ===" << std::endl;
     std::cout << "  K            - CUDA or CPU rasterizer" << std::endl;
     std::cout << "  O            - Ambient occlusion on or off" << std::endl;
     std::cout << "  , / .        - Occlusion strength" << std::endl;
     std::cout << "  ;            - Cycle occlusion debug views" << std::endl;
-    std::cout << "  F            - Wireframe (in edit mode)" << std::endl;
     std::cout << "  T            - Stats overlay" << std::endl;
     std::cout << "  Arrow keys   - Move the light" << std::endl;
     std::cout << "  P            - Capture frame to output.tga" << std::endl;
@@ -489,48 +472,8 @@ void Engine::handleEvents()
             switch (event.key.keysym.sym)
             {
 
-            // Quality controls
-            case SDLK_EQUALS: // '+' key
-            case SDLK_PLUS:
-                if (vertexEditMode)
-                {
-                    // In vertex edit mode, adjust deformation strength
-                    setDeformationStrength(vertexEditor.getDeformationStrength() * 1.2f);
-                }
-                break;
-
-            case SDLK_MINUS:
-                if (vertexEditMode)
-                {
-                    // In vertex edit mode, adjust deformation strength
-                    setDeformationStrength(vertexEditor.getDeformationStrength() * 0.8f);
-                }
-                break;
-
-            // Blend strength controls
-            case SDLK_LEFTBRACKET: // '[' key
-                if (vertexEditMode)
-                {
-                    setSelectionRadius(vertexEditor.getSelectionRadius() * 0.8f);
-                }
-                break;
-
-            case SDLK_RIGHTBRACKET: // ']' key
-                if (vertexEditMode)
-                {
-                    setSelectionRadius(vertexEditor.getSelectionRadius() * 1.2f);
-                }
-                break;
-
             case SDLK_ESCAPE:
-                if (vertexEditMode)
-                {
-                    exitVertexEditMode();
-                }
-                else
-                {
-                    running = false;
-                }
+                running = false;
                 break;
 
             case SDLK_k:
@@ -572,15 +515,8 @@ void Engine::handleEvents()
                 }
                 break;
             case SDLK_c:
-                if (vertexEditMode)
-                {
-                    vertexEditor.clearSelection();
-                }
-                else
-                {
-                    scene.clearBackground();
-                    std::cout << "Background cleared!" << std::endl;
-                }
+                scene.clearBackground();
+                std::cout << "Background cleared!" << std::endl;
                 break;
             case SDLK_g:
                 toggleCameraMode();
@@ -616,97 +552,14 @@ void Engine::handleEvents()
                 createEmptyNode();
                 break;
             case SDLK_i:
-                if (vertexEditMode)
-                {
-                    vertexEditor.invertSelection();
-                }
-                else
-                {
-                    scene.printSceneHierarchy();
-                }
+                scene.printSceneHierarchy();
                 break;
 
-            // ===== VERTEX EDIT MODE CONTROLS =====
-            case SDLK_v:
-                if (keys[SDL_SCANCODE_LCTRL])
-                {
-                    // Ctrl+V - Enter/Exit vertex edit mode
-                    if (vertexEditMode)
-                    {
-                        exitVertexEditMode();
-                    }
-                    else
-                    {
-                        enterVertexEditMode();
-                    }
-                }
-                else if (vertexEditMode)
-                {
-                    // V - Toggle vertex display
-                    toggleVertexDisplay();
-                }
-                break;
-
-            // Vertex edit mode controls (only active when in vertex edit mode)
-            case SDLK_1:
-                if (vertexEditMode)
-                {
-                    vertexEditor.setMode(VertexEditor::VERTEX_SELECT);
-                }
-                break;
-            case SDLK_2:
-                if (vertexEditMode)
-                {
-                    vertexEditor.setMode(VertexEditor::VERTEX_DEFORM);
-                }
-                break;
-
-            case SDLK_a:
-                if (vertexEditMode && !keys[SDL_SCANCODE_LCTRL])
-                {
-                    vertexEditor.selectAll();
-                }
-                break;
-            case SDLK_s:
-                if (vertexEditMode && !keys[SDL_SCANCODE_LCTRL])
-                {
-                    vertexEditor.printStatus();
-                }
-                break;
             case SDLK_r:
-                if (vertexEditMode)
-                {
-                    vertexEditor.resetDeformation();
-                }
-                else
-                {
-                    std::cout << "R pressed - zoom in" << std::endl;
-                    zoomCamera(-0.25f);
-                }
-
+                zoomCamera(-0.25f);
                 break;
             case SDLK_f:
-                if (vertexEditMode)
-                {
-                    wireframe = !wireframe;
-                }
-                else
-                {
-                    std::cout << "F pressed - zoom out" << std::endl;
-                    zoomCamera(0.25f);
-                }
-                break;
-
-            case SDLK_F5:
-                // undo every sculpt on the selected mesh
-                {
-                    SceneNode *selected = scene.getSelectedNode();
-                    if (selected && selected->hasModel())
-                    {
-                        selected->model->restoreOriginalVertices();
-                        std::cout << "Reset " << selected->name << " to original shape" << std::endl;
-                    }
-                }
+                zoomCamera(0.25f);
                 break;
             }
 
@@ -719,53 +572,23 @@ void Engine::handleEvents()
         case SDL_MOUSEBUTTONDOWN:
             if (event.button.button == SDL_BUTTON_LEFT)
             {
-                if (vertexEditMode)
-                {
-                    // vertex edit mode handling
-                    int renderX = (event.button.x * renderWidth) / windowWidth;
-                    int renderY = (event.button.y * renderHeight) / windowHeight;
-                    Matrix viewMatrix = ModelView;
-                    Matrix projMatrix = Projection;
-                    vertexEditor.handleMouseClick(renderX, renderY, viewMatrix, projMatrix, renderWidth, renderHeight);
-                }
-                else
-                {
-                    mousePressed = true;
-                    lastMouseX = event.button.x; // Store starting position
-                    lastMouseY = event.button.y;
-                    // DON'T use SDL_SetRelativeMouseMode - it's broken in WSL
-                }
+                mousePressed = true;
+                lastMouseX = event.button.x; // Store starting position
+                lastMouseY = event.button.y;
+                // DON'T use SDL_SetRelativeMouseMode - it's broken in WSL
             }
             break;
 
         case SDL_MOUSEBUTTONUP:
             if (event.button.button == SDL_BUTTON_LEFT)
             {
-                if (vertexEditMode)
-                {
-                    vertexEditor.handleMouseRelease();
-                }
-                else
-                {
-                    mousePressed = false;
-                    // DON'T use SDL_SetRelativeMouseMode(SDL_FALSE)
-                }
+                mousePressed = false;
+                // DON'T use SDL_SetRelativeMouseMode(SDL_FALSE)
             }
             break;
 
         case SDL_MOUSEMOTION:
-            if (vertexEditMode && (event.motion.state & SDL_BUTTON_LMASK))
-            {
-                // Mouse drag in vertex edit mode
-                int renderX = (event.motion.x * renderWidth) / windowWidth;
-                int renderY = (event.motion.y * renderHeight) / windowHeight;
-
-                Matrix viewMatrix = ModelView;
-                Matrix projMatrix = Projection;
-                vertexEditor.handleMouseDrag(renderX, renderY, event.motion.xrel, event.motion.yrel,
-                                             viewMatrix, projMatrix, renderWidth, renderHeight);
-            }
-            else if (mousePressed)
+            if (mousePressed)
             {
                 // Calculate deltas manually instead of using broken SDL relative mode
                 int currentX = event.motion.x;
@@ -784,23 +607,7 @@ void Engine::handleEvents()
             break;
 
         case SDL_MOUSEWHEEL:
-            if (vertexEditMode && vertexEditor.getMode() == VertexEditor::VERTEX_SELECT)
             {
-                std::cout << "Adjusting selection radius" << std::endl;
-                // Adjust selection radius with mouse wheel in vertex select mode
-                if (event.wheel.y > 0)
-                {
-                    setSelectionRadius(vertexEditor.getSelectionRadius() * 1.1f);
-                }
-                else if (event.wheel.y < 0)
-                {
-                    setSelectionRadius(vertexEditor.getSelectionRadius() * 0.9f);
-                }
-            }
-            else
-            {
-                std::cout << "Applying camera zoom" << std::endl;
-                // Normal camera zoom - OUTSIDE vertex edit mode
                 if (event.wheel.y > 0)
                 {
                     zoomCamera(-0.25f); // Zoom in
@@ -977,8 +784,6 @@ void Engine::updateCamera()
         mouseDeltaX = mouseDeltaY = 0;
     }
 
-    // KEYBOARD MOVEMENT - ONLY OUTSIDE VERTEX EDIT MODE
-    if (!vertexEditMode)
     {
         Vec3f movement(0, 0, 0);
 
@@ -1044,18 +849,8 @@ void Engine::render()
     // then render 3D scene (but don't clear framebuffer in renderScene)
     renderScene();
 
-    // The vertex overlay is the only thing left that composites on the host,
-    // so the frame comes down from the device only when it is showing.
-    if (frameOnGPU && vertexEditMode && vertexEditor.hasTarget())
-    {
-        cudaCopyResults(framebuffer);
-        frameOnGPU = false;
-    }
-
-    if (vertexEditMode && vertexEditor.hasTarget())
-    {
-        vertexEditor.renderVertexOverlay(framebuffer, renderWidth, renderHeight);
-    }
+    // nothing composites onto the frame on the host, so a CUDA frame stays in
+    // device memory until present() blits it or captureFrame() asks for it.
 }
 
 void Engine::drawBackground()
@@ -1610,7 +1405,7 @@ void Engine::shutdown()
     if (cuda_available)
     {
         for (auto &kv : cudaMeshes)
-            cudaDestroyMesh(kv.second.handle);
+            cudaDestroyMesh(kv.second);
         cudaMeshes.clear();
         cleanupCudaRasterizer();
     }
@@ -1645,20 +1440,7 @@ int Engine::getCudaMesh(Model *model)
 
     auto it = cudaMeshes.find(model);
     if (it != cudaMeshes.end())
-    {
-        // deformed since the last upload: re-send positions only. topology,
-        // uvs and normals are untouched by sculpting and blend shapes, and the
-        // CPU path does not recompute normals after a deformation either.
-        unsigned int v = model->geometryVersion();
-        if (it->second.geomVersion != v)
-        {
-            cudaUpdateMeshVerts(it->second.handle,
-                                (const float *)model->getVertexData(),
-                                model->nverts());
-            it->second.geomVersion = v;
-        }
-        return it->second.handle;
-    }
+        return it->second;
 
     int nverts = model->nverts();
     int nfaces = model->nfaces();
@@ -1706,7 +1488,7 @@ int Engine::getCudaMesh(Model *model)
         }
     }
 
-    cudaMeshes[model] = {handle, model->geometryVersion()};
+    cudaMeshes[model] = handle;
 
     std::cout << "CUDA mesh uploaded: " << nverts << " verts, "
               << nfaces << " faces (handle " << handle << ")" << std::endl;
@@ -1744,409 +1526,5 @@ void Engine::toggleCudaRendering()
     else
     {
         std::cout << "CUDA not available" << std::endl;
-    }
-}
-
-// VertexEditor implementation
-void Engine::VertexEditor::setTargetModel(SceneNode *node)
-{
-    if (!node || !node->hasModel())
-    {
-        std::cerr << "Invalid target for vertex editing" << std::endl;
-        return;
-    }
-
-    targetNode = node;
-    targetModel = node->model;
-
-    // Ensure model has backup vertices for editing
-    if (!targetModel->getVertices().empty())
-    {
-        targetModel->backupOriginalVertices();
-    }
-
-    // Initialize vertex colors for selection feedback
-    selectionColors.resize(targetModel->nverts(), Vec3f(1, 1, 1)); // White by default
-
-    std::cout << "Vertex editor targeting: " << node->name
-              << " (" << targetModel->nverts() << " vertices)" << std::endl;
-}
-
-void Engine::VertexEditor::setMode(EditMode mode)
-{
-    currentMode = mode;
-
-    switch (mode)
-    {
-    case NORMAL:
-        showVertices = false;
-        clearSelection();
-        std::cout << "NORMAL MODE" << std::endl;
-        break;
-    case VERTEX_SELECT:
-        showVertices = true;
-        std::cout << "VERTEX SELECT MODE - Click to select vertices, drag for radius selection" << std::endl;
-        std::cout << "Selected vertices will turn red. Use mouse wheel to adjust selection radius." << std::endl;
-        break;
-    case VERTEX_DEFORM:
-        showVertices = true;
-        std::cout << "VERTEX DEFORM MODE - Drag selected vertices to sculpt the mesh" << std::endl;
-        std::cout << "Use +/- keys to adjust deformation strength." << std::endl;
-        break;
-    }
-}
-
-void Engine::VertexEditor::selectVerticesInRadius(const Vec3f &worldPos, float radius)
-{
-    if (!targetModel)
-        return;
-
-    Matrix worldMatrix = targetNode->getWorldMatrix();
-    int added = 0;
-
-    for (int i = 0; i < targetModel->nverts(); i++)
-    {
-        // Transform vertex to world space
-        Vec3f localVert = targetModel->vert(i);
-        Vec4f worldVert4 = worldMatrix * embed<4>(localVert);
-        Vec3f worldVert(worldVert4[0] / worldVert4[3], worldVert4[1] / worldVert4[3], worldVert4[2] / worldVert4[3]);
-
-        // Check distance
-        float distance = (worldVert - worldPos).norm();
-        if (distance <= radius)
-        {
-            if (selectedVertices.find(i) == selectedVertices.end())
-            {
-                selectedVertices.insert(i);
-                selectionColors[i] = Vec3f(1, 0, 0); // Red for selected
-                added++;
-            }
-        }
-    }
-
-    if (added > 0)
-    {
-        std::cout << "Selected " << added << " more vertices (total: " << selectedVertices.size() << ")" << std::endl;
-    }
-}
-
-void Engine::VertexEditor::clearSelection()
-{
-    selectedVertices.clear();
-    for (auto &color : selectionColors)
-    {
-        color = Vec3f(1, 1, 1); // Reset to white
-    }
-    std::cout << "Selection cleared" << std::endl;
-}
-
-void Engine::VertexEditor::selectAll()
-{
-    if (!targetModel)
-        return;
-
-    selectedVertices.clear();
-    for (int i = 0; i < targetModel->nverts(); i++)
-    {
-        selectedVertices.insert(i);
-        selectionColors[i] = Vec3f(1, 0, 0); // Red for selected
-    }
-    std::cout << "Selected all " << targetModel->nverts() << " vertices" << std::endl;
-}
-
-void Engine::VertexEditor::invertSelection()
-{
-    if (!targetModel)
-        return;
-
-    std::set<int> newSelection;
-    for (int i = 0; i < targetModel->nverts(); i++)
-    {
-        if (selectedVertices.find(i) == selectedVertices.end())
-        {
-            newSelection.insert(i);
-            selectionColors[i] = Vec3f(1, 0, 0); // Red for selected
-        }
-        else
-        {
-            selectionColors[i] = Vec3f(1, 1, 1); // White for deselected
-        }
-    }
-    selectedVertices = newSelection;
-    std::cout << "Selection inverted - now " << selectedVertices.size() << " vertices selected" << std::endl;
-}
-
-void Engine::VertexEditor::applyDeformation(const Vec3f &direction, float strength)
-{
-    if (!targetModel || selectedVertices.empty())
-        return;
-
-    for (int vertexIndex : selectedVertices)
-    {
-        Vec3f currentPos = targetModel->vert(vertexIndex);
-        Vec3f newPos = currentPos + direction * strength;
-        targetModel->setVertex(vertexIndex, newPos);
-    }
-}
-
-Vec3f Engine::VertexEditor::screenToWorldRay(int screenX, int screenY, const Matrix &viewMatrix,
-                                             const Matrix &projMatrix, int renderWidth, int renderHeight)
-{
-    // This is a simplified approach - in a real system you'd do proper ray casting
-    // For now, we'll approximate based on the camera position and screen coordinates
-
-    if (!targetNode)
-        return Vec3f(0, 0, 0);
-
-    // Get model center as approximation
-    Vec3f modelCenter = targetNode->getWorldPosition();
-
-    // Convert screen coordinates to normalized device coordinates
-    float normalizedX = (2.0f * screenX / renderWidth) - 1.0f;
-    float normalizedY = 1.0f - (2.0f * screenY / renderHeight);
-
-    // Simple projection to world space around the model
-    return modelCenter + Vec3f(normalizedX, normalizedY, 0) * selectionRadius * 5.0f;
-}
-
-int Engine::VertexEditor::findClosestVertex(const Vec3f &worldPos, float maxDistance)
-{
-    if (!targetModel)
-        return -1;
-
-    Matrix worldMatrix = targetNode->getWorldMatrix();
-    int closestVertex = -1;
-    float closestDistance = maxDistance;
-
-    for (int i = 0; i < targetModel->nverts(); i++)
-    {
-        Vec3f localVert = targetModel->vert(i);
-        Vec4f worldVert4 = worldMatrix * embed<4>(localVert);
-        Vec3f worldVert(worldVert4[0] / worldVert4[3], worldVert4[1] / worldVert4[3], worldVert4[2] / worldVert4[3]);
-
-        float distance = (worldVert - worldPos).norm();
-        if (distance < closestDistance)
-        {
-            closestDistance = distance;
-            closestVertex = i;
-        }
-    }
-
-    return closestVertex;
-}
-
-void Engine::VertexEditor::handleMouseClick(int mouseX, int mouseY, const Matrix &viewMatrix,
-                                            const Matrix &projMatrix, int renderWidth, int renderHeight)
-{
-    if (currentMode == NORMAL || !targetModel)
-        return;
-
-    lastMouseX = mouseX;
-    lastMouseY = mouseY;
-
-    Vec3f worldPos = screenToWorldRay(mouseX, mouseY, viewMatrix, projMatrix, renderWidth, renderHeight);
-
-    switch (currentMode)
-    {
-    case VERTEX_SELECT:
-    {
-        // Select vertices in radius around click point
-        selectVerticesInRadius(worldPos, selectionRadius);
-        break;
-    }
-    case VERTEX_DEFORM:
-    {
-        if (!selectedVertices.empty())
-        {
-            startDeformation(worldPos);
-            isDragging = true;
-            lastMouseWorldPos = worldPos;
-        }
-        break;
-    }
-    default:
-        break;
-    }
-}
-
-void Engine::VertexEditor::handleMouseDrag(int mouseX, int mouseY, int deltaX, int deltaY,
-                                           const Matrix &viewMatrix, const Matrix &projMatrix,
-                                           int renderWidth, int renderHeight)
-{
-    if (!isDragging || currentMode == VERTEX_SELECT)
-        return;
-
-    Vec3f currentWorldPos = screenToWorldRay(mouseX, mouseY, viewMatrix, projMatrix, renderWidth, renderHeight);
-    Vec3f dragDirection = currentWorldPos - lastMouseWorldPos;
-
-    if (dragDirection.norm() > 0.001f)
-    { // Avoid tiny movements
-        applyDeformation(dragDirection, deformationStrength);
-        lastMouseWorldPos = currentWorldPos;
-    }
-}
-
-void Engine::VertexEditor::handleMouseRelease()
-{
-    isDragging = false;
-    if (currentMode == VERTEX_DEFORM)
-    {
-        endDeformation();
-    }
-}
-
-void Engine::VertexEditor::startDeformation(const Vec3f &center)
-{
-    deformationCenter = center;
-    isDeforming = true;
-}
-
-void Engine::VertexEditor::endDeformation()
-{
-    isDeforming = false;
-}
-
-void Engine::VertexEditor::resetDeformation()
-{
-    if (!targetModel)
-        return;
-
-    targetModel->restoreOriginalVertices();
-    std::cout << "Reset vertices to original positions" << std::endl;
-}
-
-void Engine::VertexEditor::printStatus() const
-{
-    std::cout << "\n=== VERTEX EDITOR STATUS ===" << std::endl;
-    std::cout << "Mode: ";
-    switch (currentMode)
-    {
-    case NORMAL:
-        std::cout << "NORMAL";
-        break;
-    case VERTEX_SELECT:
-        std::cout << "VERTEX SELECT";
-        break;
-    case VERTEX_DEFORM:
-        std::cout << "VERTEX DEFORM";
-        break;
-    }
-    std::cout << std::endl;
-
-    if (targetModel)
-    {
-        std::cout << "Target: " << targetNode->name << " (" << targetModel->nverts() << " vertices)" << std::endl;
-        std::cout << "Selected: " << selectedVertices.size() << " vertices" << std::endl;
-        std::cout << "Selection radius: " << selectionRadius << std::endl;
-        std::cout << "Deformation strength: " << deformationStrength << std::endl;
-        std::cout << "Deformation radius: " << deformationRadius << std::endl;
-    }
-    else
-    {
-        std::cout << "No target model selected" << std::endl;
-    }
-    std::cout << "=========================" << std::endl;
-}
-
-// Engine integration methods
-void Engine::enterVertexEditMode()
-{
-    SceneNode *selected = scene.getSelectedNode();
-    if (!selected || !selected->hasModel())
-    {
-        std::cout << "Select a model first to edit vertices (use TAB to cycle)" << std::endl;
-        return;
-    }
-
-    vertexEditMode = true;
-    vertexEditor.setTargetModel(selected);
-    vertexEditor.setMode(VertexEditor::VERTEX_SELECT);
-
-    std::cout << "\n=== ENTERED VERTEX EDIT MODE ===" << std::endl;
-    std::cout << "Target: " << selected->name << std::endl;
-    std::cout << "\n=== CONTROLS ===" << std::endl;
-    std::cout << "  1 - Select mode | 2 - Deform mode | 3 - Blend shape mode" << std::endl;
-    std::cout << "  Mouse Click - Select vertices in radius" << std::endl;
-    std::cout << "  Mouse Drag - Deform selected vertices (in deform mode)" << std::endl;
-    std::cout << "  Mouse Wheel - Adjust selection radius" << std::endl;
-    std::cout << "  C - Clear selection | A - Select all | I - Invert selection" << std::endl;
-    std::cout << "  +/- - Adjust deformation strength" << std::endl;
-    std::cout << "  B - Start blend shape recording" << std::endl;
-    std::cout << "  S - Save blend shape (when recording)" << std::endl;
-    std::cout << "  R - Reset to original shape" << std::endl;
-    std::cout << "  V - Toggle vertex display" << std::endl;
-    std::cout << "  Ctrl+V - Exit vertex edit mode" << std::endl;
-    std::cout << "==============================" << std::endl;
-
-    vertexEditor.printStatus();
-}
-
-void Engine::exitVertexEditMode()
-{
-    vertexEditMode = false;
-    vertexEditor.setMode(VertexEditor::NORMAL);
-    std::cout << "Exited vertex edit mode" << std::endl;
-}
-
-void Engine::toggleVertexDisplay()
-{
-    vertexEditor.toggleVertexDisplay();
-    std::cout << "Vertex display: " << (vertexEditor.isShowingVertices() ? "ON" : "OFF") << std::endl;
-}
-
-void Engine::setDeformationStrength(float strength)
-{
-    vertexEditor.setDeformationStrength(strength);
-    std::cout << "Deformation strength: " << vertexEditor.getDeformationStrength() << std::endl;
-}
-
-void Engine::setSelectionRadius(float radius)
-{
-    vertexEditor.setSelectionRadius(radius);
-    std::cout << "Selection radius: " << vertexEditor.getSelectionRadius() << std::endl;
-}
-
-void Engine::VertexEditor::renderVertexOverlay(TGAImage &framebuffer, int renderWidth, int renderHeight)
-{
-    if (!targetModel || !showVertices)
-        return;
-
-    Matrix worldMatrix = targetNode->getWorldMatrix();
-    Matrix viewProjection = Viewport * Projection * ModelView;
-
-    // Render all vertices as small dots
-    for (int i = 0; i < targetModel->nverts(); i++)
-    {
-        Vec3f localVert = targetModel->vert(i);
-        Vec4f worldVert4 = worldMatrix * embed<4>(localVert);
-        Vec3f worldVert(worldVert4[0] / worldVert4[3], worldVert4[1] / worldVert4[3], worldVert4[2] / worldVert4[3]);
-
-        // Project to screen
-        Vec4f screenPos = viewProjection * embed<4>(worldVert);
-        if (screenPos[3] > 0)
-        {
-            int screenX = screenPos[0] / screenPos[3];
-            int screenY = screenPos[1] / screenPos[3];
-
-            if (screenX >= 0 && screenX < renderWidth && screenY >= 0 && screenY < renderHeight)
-            {
-                // Choose color based on selection
-                TGAColor color = (selectedVertices.find(i) != selectedVertices.end()) ? TGAColor(255, 0, 0) : TGAColor(255, 255, 255);
-
-                // Draw small cross for vertex
-                for (int dx = -1; dx <= 1; dx++)
-                {
-                    for (int dy = -1; dy <= 1; dy++)
-                    {
-                        int px = screenX + dx;
-                        int py = screenY + dy;
-                        if (px >= 0 && px < renderWidth && py >= 0 && py < renderHeight)
-                        {
-                            framebuffer.set(px, py, color);
-                        }
-                    }
-                }
-            }
-        }
     }
 }

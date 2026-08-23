@@ -16,7 +16,6 @@ Run them from `src/` so the relative model paths resolve.
 | `test_cull` | does the CUDA path draw the same pixels the CPU rasterizer does, on a real model? |
 | `test_blit` | is the frame the right way up, and is R at byte 0 for SDL? |
 | `test_mesh` | does GPU-resident geometry match the host staging path exactly? |
-| `test_deform` | does a sculpt reach the GPU, and does an updated mesh match a freshly created one? |
 | `test_shaded` | do the CPU and CUDA shaded outputs stay numerically close on a textured model? |
 | `test_frustum` | does the GPU mesh path reject geometry that sits fully behind the camera? |
 | `test_engine` | does the real `Engine` render correctly on the CUDA path: scene graph, node transforms, two-pass shadows, light controls? |

@@ -71,7 +71,7 @@ static TGAColor sampleTexture(TGAImage &img, Vec2f uvf)
                                                : sampleNearest(img, uvf);
 }
 
-Model::Model(const char *filename) : verts_(), faces_(), norms_(), uv_(), diffusemap_(), normalmap_(), specularmap_(), hasBackup_(false), geomVersion_(0)
+Model::Model(const char *filename) : verts_(), faces_(), norms_(), uv_(), diffusemap_(), normalmap_(), specularmap_()
 {
     std::ifstream in;
     in.open(filename, std::ifstream::in);
@@ -124,9 +124,6 @@ Model::Model(const char *filename) : verts_(), faces_(), norms_(), uv_(), diffus
     load_texture(filename, "_diffuse.tga", diffusemap_);
     load_texture(filename, "_nm.tga", normalmap_);
     load_texture(filename, "_spec.tga", specularmap_);
-
-    // Automatically backup original vertices for animation
-    backupOriginalVertices();
 }
 
 Model::~Model() {}
@@ -214,54 +211,10 @@ Vec3f Model::normal(int iface, int nthvert)
     return norms_[idx].normalize();
 }
 
-// EXISTING ANIMATION METHODS
-void Model::setVertex(int i, const Vec3f &newPos)
-{
-    if (i >= 0 && i < verts_.size())
-    {
-        verts_[i] = newPos;
-        geomVersion_++;
-    }
-}
-
 Vec3f *Model::getVertexData()
 {
     if (verts_.empty())
         return nullptr;
     return &verts_[0];
-}
-
-void Model::updateVertex(int index, const Vec3f &offset)
-{
-    if (index >= 0 && index < verts_.size())
-    {
-        verts_[index] = verts_[index] + offset;
-        geomVersion_++;
-    }
-}
-
-void Model::resetVertices()
-{
-    if (hasBackup_)
-    {
-        verts_ = originalVerts_;
-        geomVersion_++;
-    }
-}
-
-void Model::backupOriginalVertices()
-{
-    originalVerts_ = verts_;
-    hasBackup_ = true;
-}
-
-void Model::restoreOriginalVertices()
-{
-    if (hasBackup_)
-    {
-        verts_ = originalVerts_;
-        geomVersion_++;
-        std::cout << "Restored original vertices" << std::endl;
-    }
 }
 

@@ -2,8 +2,8 @@
 //
 // every other test in here drives cuda_triangle.cu directly. this one drives
 // Engine itself - the scene graph, node transforms, the two-pass shadow
-// render, the vertex editor - because that is where the integration seams
-// are, and none of the standalone tests can see them.
+// render - because that is where the integration seams are, and none of the
+// standalone tests can see them.
 //
 // runs headless: SDL's dummy video driver means no window and no input, so
 // the loop is stepped by calling render() directly instead of run().
@@ -142,32 +142,6 @@ int main(int argc, char **argv)
     FrameStat f4 = renderAndStat(engine);
     check(f4.hash == f2.hash, "moving it back restores the frame");
 
-    printf("\n--- deformation invalidates the cached GPU mesh\n");
-    // this is the regression: geometry was uploaded once and never refreshed,
-    // so sculpting had no effect on the CUDA path
-    Model *m = a->model;
-    m->backupOriginalVertices();
-    for (int i = 0; i < m->nverts(); i++)
-        m->setVertex(i, m->vert(i) + Vec3f(0.f, 0.08f, 0.f));
-    FrameStat f5 = renderAndStat(engine, "/tmp/eng_cuda_sculpt.tga");
-    printf("  lit pixels after sculpt: %lld\n", f5.lit);
-    check(f5.hash != f4.hash, "sculpting vertices changes the CUDA frame");
-
-    m->restoreOriginalVertices();
-    FrameStat f6 = renderAndStat(engine);
-    check(f6.hash == f4.hash, "restoring vertices restores the frame exactly");
-
-    // and again through updateVertex, the offset-based mutator the sculpt
-    // drag goes through, since it bumps the version by a different route
-    for (int i = 0; i < m->nverts(); i++)
-        m->updateVertex(i, Vec3f(0.06f, 0.f, 0.f));
-    FrameStat f7 = renderAndStat(engine);
-    check(f7.hash != f6.hash, "updateVertex changes the CUDA frame");
-
-    m->restoreOriginalVertices();
-    FrameStat f8 = renderAndStat(engine);
-    check(f8.hash == f6.hash, "restoring after updateVertex restores the frame");
-
     printf("\n--- light controls affect both render paths\n");
     Scene &scene = engine.getScene();
     Vec3f savedLightColor = scene.light.color;
@@ -175,19 +149,19 @@ int main(int argc, char **argv)
 
     scene.light.intensity = 0.0f;
     FrameStat fLightOff = renderAndStat(engine);
-    check(fLightOff.hash != f8.hash, "zero direct light changes the CUDA frame");
-    check(fLightOff.sum_r < f8.sum_r, "zero direct light reduces CUDA brightness");
+    check(fLightOff.hash != f4.hash, "zero direct light changes the CUDA frame");
+    check(fLightOff.sum_r < f4.sum_r, "zero direct light reduces CUDA brightness");
 
     scene.light.color = Vec3f(1.0f, 0.2f, 0.2f);
     scene.light.intensity = savedLightIntensity;
     FrameStat fWarm = renderAndStat(engine);
-    check(fWarm.hash != f8.hash, "light colour changes the CUDA frame");
+    check(fWarm.hash != f4.hash, "light colour changes the CUDA frame");
     check(fWarm.sum_r > fWarm.sum_b, "warm CUDA light biases the red channel");
 
     scene.light.color = savedLightColor;
     scene.light.intensity = savedLightIntensity;
     FrameStat fLightReset = renderAndStat(engine);
-    check(fLightReset.hash == f8.hash, "restoring light settings restores the CUDA frame");
+    check(fLightReset.hash == f4.hash, "restoring light settings restores the CUDA frame");
 
     printf("\n--- both models share one GPU mesh\n");
     // A and B are the same .obj, so Scene hands back the same Model*, and the
@@ -209,7 +183,7 @@ int main(int argc, char **argv)
     FrameStat fm = renderAndStat(engine, "/tmp/eng_many.tga");
     printf("  meshes: %d, lit pixels: %lld\n", engine.getScene().getMeshCount(), fm.lit);
     check(engine.getScene().getMeshCount() == 40, "40 mesh nodes in the scene");
-    check(fm.lit > f8.lit, "adding 38 more meshes adds coverage");
+    check(fm.lit > f4.lit, "adding 38 more meshes adds coverage");
 
     // pixel coverage alone cannot prove every mesh got drawn - meshes overlap,
     // and one that lands off-screen contributes nothing either way. ask the

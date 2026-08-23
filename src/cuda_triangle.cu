@@ -1351,16 +1351,6 @@ public:
         return (int)meshes().size() - 1;
     }
 
-    // called only when the mesh changes (sculpting, blend shapes). a static
-    // model is uploaded once and never touched again.
-    void updateMeshVerts(int h, const float* verts, int nverts) {
-        if (h < 0 || h >= (int)meshes().size()) return;
-        DeviceMesh& dm = meshes()[h];
-        if (!dm.alive || nverts != dm.nverts) return;
-        cudaMemcpy(dm.d_verts, verts, (size_t)nverts * 3 * sizeof(float),
-                   cudaMemcpyHostToDevice);
-    }
-
     void destroyMesh(int h) {
         if (h < 0 || h >= (int)meshes().size()) return;
         DeviceMesh& dm = meshes()[h];
@@ -1527,9 +1517,6 @@ extern "C" {
                             int w, int h, int bpp) {
         if (g_cuda_rasterizer)
             g_cuda_rasterizer->setMeshTexture(handle, slot, px, w, h, bpp);
-    }
-    void cudaUpdateMeshVerts(int handle, const float* verts, int nverts) {
-        if (g_cuda_rasterizer) g_cuda_rasterizer->updateMeshVerts(handle, verts, nverts);
     }
     void cudaDestroyMesh(int handle) {
         if (g_cuda_rasterizer) g_cuda_rasterizer->destroyMesh(handle);
