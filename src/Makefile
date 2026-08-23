@@ -66,6 +66,12 @@ tools: $(TESTOBJS)
 ENGOBJS = Engine.o Scene.o SceneNode.o model.o our_gl.o tgaimage.o \
           geometry.o cuda_triangle.o
 
+test_ssao: $(ENGOBJS)
+	mkdir -p tests/bin
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -I. -o tests/bin/test_ssao \
+	  tests/test_ssao.cpp $(ENGOBJS) $(LIBS) \
+	  -L/usr/local/cuda/lib64 -lcudart
+
 test_engine: $(ENGOBJS)
 	mkdir -p tests/bin
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -I. -o tests/bin/test_engine \
@@ -100,7 +106,7 @@ setup:
 capture-rotation: $(TARGET)
 	./$(TARGET) --capture-sequence rotation 360 10.0
 
-.PHONY: all tests clean install-deps install-deps-mac run debug setup capture-rotation
+.PHONY: all tests test_engine test_ssao clean install-deps install-deps-mac run debug setup capture-rotation
 
 # header dependencies come from -MMD -MP via $(DEPS); there is no hand-written
 # list to keep in sync.

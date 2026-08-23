@@ -12,6 +12,7 @@ Engine::Engine(int winWidth, int winHeight, int renWidth, int renHeight)
       framebuffer(renWidth, renHeight, TGAImage::RGB), zbuffer(renWidth, renHeight, TGAImage::GRAYSCALE),
       frameOnGPU(false),
       running(false), wireframe(false), showStats(true),
+      ssaoEnabled(true), ssaoRadius(0.18f), ssaoIntensity(0.85f), ssaoDebug(0),
       windowWidth(winWidth), windowHeight(winHeight), renderWidth(renWidth), renderHeight(renHeight),
       mouseX(0), mouseY(0), mouseDeltaX(0), mouseDeltaY(0), lastMouseX(0), lastMouseY(0), mousePressed(false)
 
@@ -118,6 +119,9 @@ bool Engine::init()
 
     std::cout << "\n=== RENDERING ===" << std::endl;
     std::cout << "  K            - CUDA or CPU rasterizer" << std::endl;
+    std::cout << "  O            - Ambient occlusion on or off" << std::endl;
+    std::cout << "  , / .        - Occlusion strength" << std::endl;
+    std::cout << "  ;            - Cycle occlusion debug views" << std::endl;
     std::cout << "  F            - Wireframe (in edit mode)" << std::endl;
     std::cout << "  T            - Stats overlay" << std::endl;
     std::cout << "  Arrow keys   - Move the light" << std::endl;
@@ -531,6 +535,28 @@ void Engine::handleEvents()
 
             case SDLK_k:
                 toggleCudaRendering();
+                break;
+
+            case SDLK_o:
+                toggleSSAO();
+                break;
+
+            case SDLK_COMMA:
+                setSSAOIntensity(ssaoIntensity - 0.1f);
+                break;
+
+            case SDLK_PERIOD:
+                setSSAOIntensity(ssaoIntensity + 0.1f);
+                break;
+
+            // cycles the SSAO debug views: off, occlusion, normals, depth
+            case SDLK_SEMICOLON:
+                ssaoDebug = (ssaoDebug + 1) % 4;
+                std::cout << "SSAO view: "
+                          << (ssaoDebug == 0 ? "normal" :
+                              ssaoDebug == 1 ? "occlusion term" :
+                              ssaoDebug == 2 ? "normals" : "depth")
+                          << std::endl;
                 break;
 
             case SDLK_t:
@@ -1171,6 +1197,27 @@ void Engine::renderScene()
                          msh, 2.0f, 200, 170, 150);
         }
 
+        // Ambient occlusion, straight over the finished device frame. The
+        // depth buffer and the eye-space normals are already there, so this
+        // costs one more pass and nothing comes back to the host.
+        //
+        // Viewport * Projection is shared by every mesh in the frame (only
+        // ModelView differs), so inverting it lets the kernel rebuild eye-space
+        // positions from depth alone instead of storing a position buffer.
+        if (ssaoEnabled && ssaoIntensity > 0.f)
+        {
+            Matrix vp = Viewport * Projection;
+            Matrix inv_vp = vp.invert();
+            float vp16[16], inv16[16];
+            for (int r = 0; r < 4; r++)
+                for (int c = 0; c < 4; c++)
+                {
+                    vp16[r * 4 + c] = vp[r][c];
+                    inv16[r * 4 + c] = inv_vp[r][c];
+                }
+            cudaApplySSAO(inv16, vp16, ssaoRadius, ssaoIntensity, 0.02f, ssaoDebug);
+        }
+
         // no readback: leave the frame on the device for present() to blit.
         // the pending kernels are flushed by whichever of cudaBlitToTexture /
         // cudaCopyResults runs first, so the GPU keeps working meanwhile.
@@ -1669,6 +1716,24 @@ int Engine::getCudaMesh(Model *model)
 // The rasterizer ignores this; it only changes how the ray tracer shades the
 // object. Marking the tracer dirty rebuilds its scene and restarts the
 // accumulated image, since the old samples used the previous surface.
+void Engine::toggleSSAO()
+{
+    ssaoEnabled = !ssaoEnabled;
+    std::cout << "SSAO: " << (ssaoEnabled ? "ON" : "OFF") << std::endl;
+}
+
+void Engine::setSSAOIntensity(float v)
+{
+    ssaoIntensity = std::max(0.0f, std::min(1.0f, v));
+    std::cout << "SSAO intensity: " << ssaoIntensity << std::endl;
+}
+
+void Engine::setSSAORadius(float v)
+{
+    ssaoRadius = std::max(0.01f, std::min(2.0f, v));
+    std::cout << "SSAO radius: " << ssaoRadius << std::endl;
+}
+
 void Engine::toggleCudaRendering()
 {
     if (cuda_available)

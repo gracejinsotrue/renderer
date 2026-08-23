@@ -35,6 +35,9 @@ extern "C"
     void cudaSetMeshTexture(int handle, int slot, const unsigned char *px,
                             int w, int h, int bpp);
     void cudaSetLinearTextureFiltering(int enabled);
+    // screen space ambient occlusion over the finished device frame
+    void cudaApplySSAO(const float *inv_vp16, const float *vp16,
+                       float radius, float intensity, float bias, int debug);
     void cudaUpdateMeshVerts(int handle, const float *verts, int nverts);
     void cudaDestroyMesh(int handle);
     // mshadow16 may be NULL for an unshadowed draw
@@ -91,6 +94,13 @@ private:
     bool running;
     bool wireframe;
     bool showStats;
+
+    // SSAO. radius is in world units, so it scales with the scene rather
+    // than the framebuffer; intensity 0 turns the pass off entirely.
+    bool ssaoEnabled;
+    float ssaoRadius;
+    float ssaoIntensity;
+    int ssaoDebug;    // 0 off, 1 ao term, 2 normals, 3 depth
 
     // Rendering dimensions
     int renderWidth, renderHeight;
@@ -291,6 +301,14 @@ public:
     void toggleCudaRendering();
     bool isCudaAvailable() const { return cuda_available; }
     bool isCudaRenderingEnabled() const { return use_cuda_rendering; }
+
+    void toggleSSAO();
+    bool isSSAOEnabled() const { return ssaoEnabled; }
+    void setSSAODebug(int mode) { ssaoDebug = mode; }
+    void setSSAOIntensity(float v);
+    void setSSAORadius(float v);
+    float getSSAOIntensity() const { return ssaoIntensity; }
+    float getSSAORadius() const { return ssaoRadius; }
 };
 
 #endif // __ENGINE_H__

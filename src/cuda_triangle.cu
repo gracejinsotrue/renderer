@@ -208,7 +208,7 @@ void tiled_raster_kernel(const CudaTriangle* triangles,
                          const int* tile_counts, const int* tile_offsets,
                          const int* tri_indices, const CudaMaterial* materials,
                          unsigned char* framebuffer, int* zbuffer,
-                         const int* shadowbuf,
+                         const int* shadowbuf, float* normalbuf,
                          int width, int height, int tiles_x)
 {
     int tile = blockIdx.y * tiles_x + blockIdx.x;
@@ -292,6 +292,14 @@ void tiled_raster_kernel(const CudaTriangle* triangles,
             float nzi = tri.nz[0]*pw0 + tri.nz[1]*pw1 + tri.nz[2]*pw2;
             float nlen = sqrtf(nxi*nxi + nyi*nyi + nzi*nzi);
             if (nlen > 1e-12f) { nxi /= nlen; nyi /= nlen; nzi /= nlen; }
+
+            // Keep the interpolated normal for SSAO before the normal map
+            // gets a chance to replace it. The mapped normal carries pore and
+            // wrinkle detail, which is what you want for lighting and exactly
+            // what you do not want for orienting an occlusion hemisphere: it
+            // tilts the hemisphere into the surface and every sample then
+            // reads as occluded.
+            float gnx = nxi, gny = nyi, gnz = nzi;
             // NOT reoriented toward the camera. an interpolated normal near a
             // silhouette legitimately points away, and forcing nz >= 0 flips
             // the sign of n.l discontinuously wherever nz crosses zero, which
@@ -380,8 +388,264 @@ void tiled_raster_kernel(const CudaTriangle* triangles,
             framebuffer[color_idx + 0] = (unsigned char)fminf(cr, 255.0f);
             framebuffer[color_idx + 1] = (unsigned char)fminf(cg, 255.0f);
             framebuffer[color_idx + 2] = (unsigned char)fminf(cb, 255.0f);
+
+            // eye-space normal for SSAO. indexed like the zbuffer (bottom-up),
+            // since that is the space the occlusion pass works in.
+            if (normalbuf) {
+                normalbuf[pixel_idx * 3 + 0] = gnx;
+                normalbuf[pixel_idx * 3 + 1] = gny;
+                normalbuf[pixel_idx * 3 + 2] = gnz;
+            }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// screen space ambient occlusion
+// ---------------------------------------------------------------------------
+//
+// The rasterizer's only light is one directional lamp plus a flat ambient
+// term, so cavities read exactly as bright as flat surfaces and the image
+// looks pasted together. SSAO recovers the contact shading a path tracer gets
+// for free: for each pixel, sample a hemisphere around its normal and count
+// how many of those sample points are buried behind geometry the camera can
+// already see.
+//
+// Positions are reconstructed rather than stored. screen = Viewport *
+// Projection * eye, and Viewport * Projection is the same for every mesh in a
+// frame (only ModelView differs), so inverting it turns any (x, y, depth)
+// straight back into eye space without a position buffer. The normals do have
+// to be written out, which is what normalbuf is for.
+//
+// Convention note: this z-buffer keeps the LARGEST depth as nearest, and eye
+// space has the camera at +z, so "closer to the camera" is "greater z" in both
+// spaces. An occluder is therefore one whose eye z is greater than the sample
+// point's.
+
+#define SSAO_SAMPLES 24
+
+__device__ __forceinline__
+void mat4_mul_point(const float* m, float x, float y, float z,
+                    float& ox, float& oy, float& oz)
+{
+    float w = m[12] * x + m[13] * y + m[14] * z + m[15];
+    if (fabsf(w) < 1e-12f) w = 1e-12f;
+    ox = (m[0] * x + m[1] * y + m[2]  * z + m[3])  / w;
+    oy = (m[4] * x + m[5] * y + m[6]  * z + m[7])  / w;
+    oz = (m[8] * x + m[9] * y + m[10] * z + m[11]) / w;
+}
+
+// integer hash, for the per-pixel rotation that breaks up banding
+__device__ __forceinline__ unsigned int ssao_hash(unsigned int v)
+{
+    v ^= v >> 16; v *= 0x7feb352dU;
+    v ^= v >> 15; v *= 0x846ca68bU;
+    v ^= v >> 16;
+    return v;
+}
+
+__global__
+void ssao_kernel(const int* zbuffer, const float* normalbuf, float* ao,
+                 const float* inv_vp, const float* vp,
+                 const float* kernel_samples,
+                 float radius, float bias, int width, int height)
+{
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= width || y >= height) return;
+    int idx = y * width + x;
+
+    float depth = __int_as_float(zbuffer[idx]);
+    if (depth <= 0.0f) { ao[idx] = 1.0f; return; }   // background
+
+    float nx = normalbuf[idx * 3 + 0];
+    float ny = normalbuf[idx * 3 + 1];
+    float nz = normalbuf[idx * 3 + 2];
+    float nlen = sqrtf(nx * nx + ny * ny + nz * nz);
+    if (nlen < 1e-6f) { ao[idx] = 1.0f; return; }
+    nx /= nlen; ny /= nlen; nz /= nlen;
+
+    float px, py, pz;
+    mat4_mul_point(inv_vp, (float)x, (float)y, depth, px, py, pz);
+
+    // random in-plane rotation so neighbouring pixels use different sample
+    // directions; the blur pass then averages the noise away
+    unsigned int h = ssao_hash((unsigned int)(y * width + x) * 2654435761u);
+    float ang = (h & 0xFFFF) * (6.2831853f / 65536.0f);
+    float rc = cosf(ang), rs = sinf(ang);
+
+    // Gram-Schmidt a tangent frame off an arbitrary axis
+    float ax = (fabsf(nz) < 0.9f) ? 0.0f : 1.0f;
+    float ay = (fabsf(nz) < 0.9f) ? 0.0f : 0.0f;
+    float az = (fabsf(nz) < 0.9f) ? 1.0f : 0.0f;
+    float tx = ay * nz - az * ny;
+    float ty = az * nx - ax * nz;
+    float tz = ax * ny - ay * nx;
+    float tl = sqrtf(tx * tx + ty * ty + tz * tz);
+    if (tl < 1e-6f) { ao[idx] = 1.0f; return; }
+    tx /= tl; ty /= tl; tz /= tl;
+    float bx = ny * tz - nz * ty;
+    float by = nz * tx - nx * tz;
+    float bz = nx * ty - ny * tx;
+
+    // How fast the surface itself recedes across the sampling footprint. A
+    // face-on surface (|nz| = 1) barely changes depth from one sample to the
+    // next; a surface seen edge-on changes a lot, and a fixed bias then reads
+    // that slope as occlusion and covers everything in acne. Scaling the bias
+    // by the slope is what separates "the surface tilts away here" from
+    // "something is actually in front of this point".
+    float slope = sqrtf(fmaxf(0.0f, 1.0f - nz * nz)) / fmaxf(fabsf(nz), 0.15f);
+
+    float occlusion = 0.0f;
+    for (int i = 0; i < SSAO_SAMPLES; i++) {
+        float sx = kernel_samples[i * 3 + 0];
+        float sy = kernel_samples[i * 3 + 1];
+        float sz = kernel_samples[i * 3 + 2];
+
+        // rotate the sample about the normal
+        float rx = sx * rc - sy * rs;
+        float ry = sx * rs + sy * rc;
+
+        // tangent space -> eye space
+        float ex = tx * rx + bx * ry + nx * sz;
+        float ey = ty * rx + by * ry + ny * sz;
+        float ez = tz * rx + bz * ry + nz * sz;
+
+        float qx = px + ex * radius;
+        float qy = py + ey * radius;
+        float qz = pz + ez * radius;
+
+        // project the sample point back to the screen
+        float ux, uy, uz;
+        mat4_mul_point(vp, qx, qy, qz, ux, uy, uz);
+        int ix = (int)(ux + 0.5f), iy = (int)(uy + 0.5f);
+        if (ix < 0 || ix >= width || iy < 0 || iy >= height) continue;
+
+        float sdepth = __int_as_float(zbuffer[iy * width + ix]);
+        if (sdepth <= 0.0f) continue;            // nothing drawn there
+
+        // what the camera actually sees along that ray, in eye space
+        float ox2, oy2, oz2;
+        mat4_mul_point(inv_vp, (float)ix, (float)iy, sdepth, ox2, oy2, oz2);
+
+        // the footprint of this particular sample, and what the surface alone
+        // would do over that distance
+        float ox = qx - px, oy = qy - py, oz = qz - pz;
+        float off = sqrtf(ox * ox + oy * oy + oz * oz);
+        float bias_eff = bias + off * slope;
+
+        // greater eye z means nearer the camera, so this occludes the sample
+        if (oz2 >= qz + bias_eff) {
+            // fade out occluders that sit far outside the sampling radius,
+            // otherwise a silhouette throws a dark halo onto whatever is
+            // behind it. smoothstep rather than a hard cutoff so the
+            // transition does not show up as an edge.
+            float dz = fabsf(pz - oz2);
+            float t = fminf(1.0f, radius / fmaxf(dz, 1e-6f));
+            occlusion += t * t * (3.0f - 2.0f * t);
+        }
+    }
+
+    ao[idx] = fmaxf(0.0f, 1.0f - occlusion / (float)SSAO_SAMPLES);
+}
+
+// separable would be cheaper, but the noise here is a per-pixel rotation
+// rather than a tiled pattern, so a small box blur is enough to clean it up
+__global__
+void ssao_blur_kernel(const float* ao_in, float* ao_out, int width, int height)
+{
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= width || y >= height) return;
+
+    const int R = 2;
+    float sum = 0.0f;
+    int n = 0;
+    for (int dy = -R; dy <= R; dy++) {
+        int yy = y + dy;
+        if (yy < 0 || yy >= height) continue;
+        for (int dx = -R; dx <= R; dx++) {
+            int xx = x + dx;
+            if (xx < 0 || xx >= width) continue;
+            sum += ao_in[yy * width + xx];
+            n++;
+        }
+    }
+    ao_out[y * width + x] = n ? sum / n : 1.0f;
+}
+
+// writes the occlusion term straight to the frame as greyscale, so the term
+// can be inspected on its own instead of inferred from the shaded result
+__global__
+void ssao_debug_kernel(unsigned char* framebuffer, const float* ao,
+                       const float* normalbuf, const int* zbuffer,
+                       const float* inv_vp, const float* vp,
+                       int mode, int width, int height)
+{
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= width || y >= height) return;
+    int idx = y * width + x;
+    int ci = ((height - 1 - y) * width + x) * 3;
+
+    if (mode == 2) {
+        // eye-space normal as rgb, 0.5 grey is zero
+        float nx = normalbuf[idx * 3 + 0];
+        float ny = normalbuf[idx * 3 + 1];
+        float nz = normalbuf[idx * 3 + 2];
+        framebuffer[ci + 0] = (unsigned char)(fminf(1.f, fmaxf(0.f, nx * 0.5f + 0.5f)) * 255.f);
+        framebuffer[ci + 1] = (unsigned char)(fminf(1.f, fmaxf(0.f, ny * 0.5f + 0.5f)) * 255.f);
+        framebuffer[ci + 2] = (unsigned char)(fminf(1.f, fmaxf(0.f, nz * 0.5f + 0.5f)) * 255.f);
+        return;
+    }
+    if (mode == 4) {
+        // round-trip test: screen -> eye -> screen must land where it started.
+        // red is x error, green y, blue depth error, all scaled by 16.
+        float d = __int_as_float(zbuffer[idx]);
+        if (d <= 0.0f) {
+            framebuffer[ci+0]=framebuffer[ci+1]=framebuffer[ci+2]=0; return;
+        }
+        float ex, ey, ez;
+        mat4_mul_point(inv_vp, (float)x, (float)y, d, ex, ey, ez);
+        float rx, ry, rz;
+        mat4_mul_point(vp, ex, ey, ez, rx, ry, rz);
+        float e0 = fabsf(rx - (float)x) * 16.0f;
+        float e1 = fabsf(ry - (float)y) * 16.0f;
+        float e2 = fabsf(rz - d) * 16.0f;
+        framebuffer[ci+0] = (unsigned char)fminf(255.f, e0);
+        framebuffer[ci+1] = (unsigned char)fminf(255.f, e1);
+        framebuffer[ci+2] = (unsigned char)fminf(255.f, e2);
+        return;
+    }
+    if (mode == 3) {
+        // raw screen depth, 0..255 already
+        float d = __int_as_float(zbuffer[idx]);
+        unsigned char v = (unsigned char)fminf(255.f, fmaxf(0.f, d));
+        framebuffer[ci + 0] = v; framebuffer[ci + 1] = v; framebuffer[ci + 2] = v;
+        return;
+    }
+    float a = fminf(1.0f, fmaxf(0.0f, ao[idx]));
+    unsigned char v = (unsigned char)(a * 255.0f);
+    framebuffer[ci + 0] = v; framebuffer[ci + 1] = v; framebuffer[ci + 2] = v;
+}
+
+// multiplies the occlusion into the finished frame. the framebuffer is
+// top-down and everything above is bottom-up, hence the flip on the index.
+__global__
+void ssao_apply_kernel(unsigned char* framebuffer, const float* ao,
+                       float intensity, int width, int height)
+{
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= width || y >= height) return;
+
+    float a = ao[y * width + x];
+    a = 1.0f - intensity * (1.0f - a);      // intensity 0 disables, 1 is full
+    a = fminf(1.0f, fmaxf(0.0f, a));
+
+    int ci = ((height - 1 - y) * width + x) * 3;
+    for (int c = 0; c < 3; c++)
+        framebuffer[ci + c] = (unsigned char)(framebuffer[ci + c] * a);
 }
 
 // per-frame triangle capacity. rumi is ~190k faces across its meshes, and
@@ -556,6 +820,15 @@ private:
     CudaMaterial* d_materials;   // one slot per mesh drawn this frame
     size_t mat_capacity;         // slots currently allocated in d_materials
     int*   d_shadowbuf;          // depth from the light's point of view
+
+    // SSAO. normals are bottom-up like the zbuffer; ao/ao_blur are one float
+    // per pixel. d_ssao_kernel holds the fixed hemisphere sample set.
+    float* d_normalbuf;
+    float* d_ao;
+    float* d_ao_blur;
+    float* d_ssao_kernel;
+    float* d_ssao_inv_vp;
+    float* d_ssao_vp;
     // staged host-side and uploaded in one memcpy per flush. slot 0 is always
     // the neutral pass-through material the host staging path points at.
     std::vector<CudaMaterial> h_materials;
@@ -627,6 +900,14 @@ public:
         mat_capacity = MATERIALS_INITIAL;
         cudaMalloc(&d_materials, mat_capacity * sizeof(CudaMaterial));
         cudaMalloc(&d_shadowbuf, (size_t)w * h * sizeof(int));
+
+        cudaMalloc(&d_normalbuf, (size_t)w * h * 3 * sizeof(float));
+        cudaMalloc(&d_ao,        (size_t)w * h * sizeof(float));
+        cudaMalloc(&d_ao_blur,   (size_t)w * h * sizeof(float));
+        cudaMalloc(&d_ssao_kernel, SSAO_SAMPLES * 3 * sizeof(float));
+        cudaMalloc(&d_ssao_inv_vp, 16 * sizeof(float));
+        cudaMalloc(&d_ssao_vp,     16 * sizeof(float));
+        uploadSSAOKernel();
         cudaMemset(d_shadowbuf, 0, (size_t)w * h * sizeof(int));
         resetMaterials();
 
@@ -662,6 +943,12 @@ public:
             cudaFree(d_stats);
             cudaFree(d_materials);
             cudaFree(d_shadowbuf);
+            cudaFree(d_normalbuf);
+            cudaFree(d_ao);
+            cudaFree(d_ao_blur);
+            cudaFree(d_ssao_kernel);
+            cudaFree(d_ssao_inv_vp);
+            cudaFree(d_ssao_vp);
             cudaEventDestroy(ev_start);
             cudaEventDestroy(ev_upload);
             cudaEventDestroy(ev_bin);
@@ -671,10 +958,83 @@ public:
 
     bool isInitialized() const { return initialized; }
 
+    // A fixed hemisphere sample set, built once. Samples are pushed toward the
+    // origin so most of them land close to the shaded point, which is where
+    // occlusion actually matters; spreading them evenly through the hemisphere
+    // wastes most of the budget on distant geometry that barely darkens
+    // anything.
+    void uploadSSAOKernel() {
+        float h_kernel[SSAO_SAMPLES * 3];
+        unsigned int seed = 12345u;
+        auto rnd = [&seed]() {
+            seed = seed * 1664525u + 1013904223u;
+            return (float)((seed >> 8) & 0xFFFFFF) / (float)0xFFFFFF;
+        };
+        for (int i = 0; i < SSAO_SAMPLES; i++) {
+            float x, y, z, len;
+            do {
+                x = rnd() * 2.0f - 1.0f;
+                y = rnd() * 2.0f - 1.0f;
+                z = rnd();                       // hemisphere: z >= 0
+                len = sqrtf(x * x + y * y + z * z);
+            } while (len < 1e-4f || len > 1.0f);
+            x /= len; y /= len; z /= len;
+
+            // Clustered toward the shaded point, but not right on top of it:
+            // a sample only a pixel or two away cannot see past the surface's
+            // own curvature and contributes nothing but noise.
+            float t = (float)i / (float)SSAO_SAMPLES;
+            float scale = 0.35f + 0.65f * t * t;
+            h_kernel[i * 3 + 0] = x * scale;
+            h_kernel[i * 3 + 1] = y * scale;
+            h_kernel[i * 3 + 2] = z * scale;
+        }
+        cudaMemcpy(d_ssao_kernel, h_kernel, sizeof(h_kernel),
+                   cudaMemcpyHostToDevice);
+    }
+
+    // Occludes the finished frame in place. inv_vp16 and vp16 are
+    // inverse(Viewport*Projection) and Viewport*Projection for this frame,
+    // row-major; both are mesh-independent, which is what lets the kernel
+    // rebuild eye-space positions from the depth buffer alone.
+    void applySSAO(const float* inv_vp16, const float* vp16,
+                   float radius, float intensity, float bias,
+                   int ssao_debug = 0) {
+        if (!initialized || intensity <= 0.0f) return;
+        flush();
+
+        cudaMemcpy(d_ssao_inv_vp, inv_vp16, 16 * sizeof(float),
+                   cudaMemcpyHostToDevice);
+        cudaMemcpy(d_ssao_vp, vp16, 16 * sizeof(float),
+                   cudaMemcpyHostToDevice);
+
+        dim3 block(16, 16);
+        dim3 grid((width + block.x - 1) / block.x,
+                  (height + block.y - 1) / block.y);
+
+        ssao_kernel<<<grid, block>>>(d_zbuffer, d_normalbuf, d_ao,
+                                     d_ssao_inv_vp, d_ssao_vp, d_ssao_kernel,
+                                     radius, bias, width, height);
+        ssao_blur_kernel<<<grid, block>>>(d_ao, d_ao_blur, width, height);
+        if (ssao_debug)
+            ssao_debug_kernel<<<grid, block>>>(d_framebuffer, d_ao_blur,
+                                               d_normalbuf, d_zbuffer,
+                                               d_ssao_inv_vp, d_ssao_vp,
+                                               ssao_debug, width, height);
+        else
+            ssao_apply_kernel<<<grid, block>>>(d_framebuffer, d_ao_blur,
+                                               intensity, width, height);
+
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess)
+            printf("SSAO kernel error: %s\n", cudaGetErrorString(err));
+    }
+
     void clear() {
         if (!initialized) return;
 
         cudaMemset(d_framebuffer, 0, width * height * 3);
+        cudaMemset(d_normalbuf, 0, (size_t)width * height * 3 * sizeof(float));
 
         // zbuffer stores ints (float-as-int). nearest is the MAXIMUM depth here,
         // so the "empty" value is 0 (+0.0f) and any visible fragment beats it.
@@ -895,7 +1255,7 @@ public:
         } else {
             tiled_raster_kernel<<<gridSize, blockSize>>>(
                 d_triangles, d_tile_counts, d_tile_offsets, d_tri_indices,
-                d_materials, d_framebuffer, d_zbuffer, d_shadowbuf,
+                d_materials, d_framebuffer, d_zbuffer, d_shadowbuf, d_normalbuf,
                 width, height, tiles_x
             );
         }
@@ -1205,6 +1565,15 @@ extern "C" {
             g_cuda_rasterizer->getStats(submitted, culled_back, culled_offscreen,
                                         bin_overflow);
         }
+    }
+
+    // Screen space ambient occlusion over the finished frame. inv_vp16 and
+    // vp16 are inverse(Viewport*Projection) and Viewport*Projection, row-major.
+    // radius is in world units, intensity 0 disables the effect.
+    void cudaApplySSAO(const float* inv_vp16, const float* vp16,
+                       float radius, float intensity, float bias, int debug) {
+        if (g_cuda_rasterizer)
+            g_cuda_rasterizer->applySSAO(inv_vp16, vp16, radius, intensity, bias, debug);
     }
 
     // The finished frame, still on the device. Pending kernels are flushed
