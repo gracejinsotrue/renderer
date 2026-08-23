@@ -802,6 +802,42 @@ static bool uploadTexture(const unsigned char* px, int w, int h, int bpp,
     return cudaCreateTextureObject(tex_out, &rd, &td, NULL) == cudaSuccess;
 }
 
+// Supersampling resolve: average each ss x ss block of the oversampled frame
+// down to one output pixel. Both buffers are stored top-down in the same R,G,B
+// order, so this is a straight block mean with no flip.
+//
+// This is what anti-aliases the image. Coverage was decided at ss*ss points
+// inside every output pixel instead of one, so a silhouette that crosses a
+// pixel comes out proportionally blended instead of all-or-nothing.
+__global__
+void downsample_kernel(const unsigned char* src, unsigned char* dst,
+                       int out_w, int out_h, int ss)
+{
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= out_w || y >= out_h) return;
+
+    int src_w = out_w * ss;
+    int n = ss * ss;
+    int acc[3] = {0, 0, 0};
+
+    for (int j = 0; j < ss; j++) {
+        const unsigned char* row = src + ((size_t)(y * ss + j) * src_w + x * ss) * 3;
+        for (int i = 0; i < ss; i++) {
+            acc[0] += row[i * 3 + 0];
+            acc[1] += row[i * 3 + 1];
+            acc[2] += row[i * 3 + 2];
+        }
+    }
+
+    unsigned char* o = dst + ((size_t)y * out_w + x) * 3;
+    // + n/2 rounds to nearest rather than truncating, which otherwise biases
+    // the whole frame a fraction of a level darker.
+    o[0] = (unsigned char)((acc[0] + n / 2) / n);
+    o[1] = (unsigned char)((acc[1] + n / 2) / n);
+    o[2] = (unsigned char)((acc[2] + n / 2) / n);
+}
+
 class CudaTriangleRasterizer {
 private:
     CudaTriangle* d_triangles;
@@ -832,7 +868,14 @@ private:
     // staged host-side and uploaded in one memcpy per flush. slot 0 is always
     // the neutral pass-through material the host staging path points at.
     std::vector<CudaMaterial> h_materials;
+
+    // width/height are the RENDER dimensions, which are out_width/out_height
+    // scaled by ss. Every buffer and kernel above works at render resolution;
+    // only the resolve and the two readback paths use the output size.
     int width, height;
+    int out_width, out_height;
+    int ss;
+    unsigned char* d_resolve;   // NULL when ss == 1: the frame is already 1:1
     int tiles_x, tiles_y, num_tiles;
 
     // per-stage GPU timing. nsys can't get a GPU timeline through WSL2 and
@@ -849,9 +892,12 @@ private:
     int stat_submitted, stat_culled_back, stat_culled_offscreen;
 
 public:
-    CudaTriangleRasterizer(int w, int h)
-        : width(w), height(h), initialized(false),
+    CudaTriangleRasterizer(int out_w, int out_h, int ss_factor)
+        : width(out_w * ss_factor), height(out_h * ss_factor),
+          out_width(out_w), out_height(out_h), ss(ss_factor),
+          d_resolve(NULL), initialized(false),
           stat_submitted(0), stat_culled_back(0), stat_culled_offscreen(0) {
+        int w = width, h = height;
         tiles_x = (w + TILE_W - 1) / TILE_W;
         tiles_y = (h + TILE_H - 1) / TILE_H;
         num_tiles = tiles_x * tiles_y;
@@ -907,6 +953,13 @@ public:
         cudaMalloc(&d_ssao_kernel, SSAO_SAMPLES * 3 * sizeof(float));
         cudaMalloc(&d_ssao_inv_vp, 16 * sizeof(float));
         cudaMalloc(&d_ssao_vp,     16 * sizeof(float));
+        if (ss > 1) {
+            err = cudaMalloc(&d_resolve, (size_t)out_width * out_height * 3);
+            if (err != cudaSuccess) {
+                printf("CUDA malloc resolve buffer failed: %s\n", cudaGetErrorString(err));
+                return;
+            }
+        }
         uploadSSAOKernel();
         cudaMemset(d_shadowbuf, 0, (size_t)w * h * sizeof(int));
         resetMaterials();
@@ -925,8 +978,14 @@ public:
 
         h_batch.reserve(4096);
         initialized = true;
-        printf("CUDA rasterizer initialized: %dx%d, %dx%d tiles of %dx%d\n",
-               width, height, tiles_x, tiles_y, TILE_W, TILE_H);
+        if (ss > 1)
+            printf("CUDA rasterizer initialized: %dx%d -> %dx%d (%dx SSAA), "
+                   "%dx%d tiles of %dx%d\n",
+                   width, height, out_width, out_height, ss,
+                   tiles_x, tiles_y, TILE_W, TILE_H);
+        else
+            printf("CUDA rasterizer initialized: %dx%d, %dx%d tiles of %dx%d\n",
+                   width, height, tiles_x, tiles_y, TILE_W, TILE_H);
     }
 
     ~CudaTriangleRasterizer() {
@@ -949,6 +1008,7 @@ public:
             cudaFree(d_ssao_kernel);
             cudaFree(d_ssao_inv_vp);
             cudaFree(d_ssao_vp);
+            if (d_resolve) cudaFree(d_resolve);
             cudaEventDestroy(ev_start);
             cudaEventDestroy(ev_upload);
             cudaEventDestroy(ev_bin);
@@ -1281,12 +1341,23 @@ public:
     // already wrote it top-down in R,G,B, so no conversion is needed and one
     // 2D memcpy replaces ~2M per-pixel host operations a frame.
     // dst_pitch is SDL's row stride, which may be wider than width * 3.
+    // The buffer callers should read: the resolved one when supersampling,
+    // otherwise the render target itself. Always out_width x out_height.
+    unsigned char* resolvedFramebuffer() {
+        if (ss <= 1) return d_framebuffer;
+        dim3 block(16, 16);
+        dim3 grid((out_width + 15) / 16, (out_height + 15) / 16);
+        downsample_kernel<<<grid, block>>>(d_framebuffer, d_resolve,
+                                           out_width, out_height, ss);
+        return d_resolve;
+    }
+
     unsigned char* deviceFramebuffer(int* w, int* h) {
-        if (w) *w = width;
-        if (h) *h = height;
+        if (w) *w = out_width;
+        if (h) *h = out_height;
         if (!initialized) return NULL;
         flush();
-        return d_framebuffer;
+        return resolvedFramebuffer();
     }
 
     void blitToTexture(void* dst, int dst_pitch) {
@@ -1294,9 +1365,10 @@ public:
 
         flush();
 
+        const unsigned char* src = resolvedFramebuffer();
         cudaError_t err = cudaMemcpy2D(dst, (size_t)dst_pitch,
-                                       d_framebuffer, (size_t)width * 3,
-                                       (size_t)width * 3, (size_t)height,
+                                       src, (size_t)out_width * 3,
+                                       (size_t)out_width * 3, (size_t)out_height,
                                        cudaMemcpyDeviceToHost);
         if (err != cudaSuccess) {
             printf("CUDA blit failed: %s\n", cudaGetErrorString(err));
@@ -1305,13 +1377,14 @@ public:
 
     // slow path, only for writing a TGA. nothing composites on the host, so
     // the interactive path never calls this.
-    // host_framebuffer is width * height * 3, top-down R,G,B.
+    // host_framebuffer is out_width * out_height * 3, top-down R,G,B.
     void copyToCPU(unsigned char* host_framebuffer) {
         if (!initialized) return;
 
         flush();
 
-        cudaMemcpy(host_framebuffer, d_framebuffer, width * height * 3,
+        cudaMemcpy(host_framebuffer, resolvedFramebuffer(),
+                   (size_t)out_width * out_height * 3,
                    cudaMemcpyDeviceToHost);
     }
 
@@ -1466,11 +1539,20 @@ static CudaTriangleRasterizer* g_cuda_rasterizer = nullptr;
 
 // C interface, matching the signatures Engine.cpp calls
 extern "C" {
-    bool initCudaRasterizer(int width, int height) {
+    // ss is the supersampling factor: the frame is rendered at
+    // (width*ss) x (height*ss) and box-filtered back down on the device.
+    // Existing callers declare the two-argument form, so that stays as-is and
+    // means ss = 1.
+    bool initCudaRasterizerSS(int width, int height, int ss) {
+        if (ss < 1) ss = 1;
         if (g_cuda_rasterizer) delete g_cuda_rasterizer;
 
-        g_cuda_rasterizer = new CudaTriangleRasterizer(width, height);
+        g_cuda_rasterizer = new CudaTriangleRasterizer(width, height, ss);
         return g_cuda_rasterizer->isInitialized();
+    }
+
+    bool initCudaRasterizer(int width, int height) {
+        return initCudaRasterizerSS(width, height, 1);
     }
 
     void cleanupCudaRasterizer() {

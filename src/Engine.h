@@ -15,6 +15,8 @@
 extern "C"
 {
     bool initCudaRasterizer(int width, int height);
+    // renders at (width*ss) x (height*ss) and box-filters down on the device
+    bool initCudaRasterizerSS(int width, int height, int ss);
     void cleanupCudaRasterizer();
     void cudaClearBuffers();
     void cudaRenderTriangle(const Vec4f &v0, const Vec4f &v1, const Vec4f &v2, const TGAColor &color);
@@ -84,6 +86,12 @@ private:
     // Engine state
     bool running;
     bool showStats;
+
+    // Supersampling factor for the CUDA path. 1 disables it. The whole
+    // pipeline (raster, shadows, SSAO) runs at the larger size and the frame
+    // is averaged back down on the device, so edges, textures and specular
+    // highlights are all anti-aliased.
+    int ssaaFactor;
 
     // SSAO. radius is in world units, so it scales with the scene rather
     // than the framebuffer; intensity 0 turns the pass off entirely.
@@ -168,6 +176,9 @@ public:
     void toggleCudaRendering();
     bool isCudaAvailable() const { return cuda_available; }
     bool isCudaRenderingEnabled() const { return use_cuda_rendering; }
+
+    void setSSAA(int factor);
+    int getSSAA() const { return ssaaFactor; }
 
     void toggleSSAO();
     bool isSSAOEnabled() const { return ssaoEnabled; }

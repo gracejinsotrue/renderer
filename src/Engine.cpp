@@ -11,7 +11,7 @@ Engine::Engine(int winWidth, int winHeight, int renWidth, int renHeight)
     : window(nullptr), sdlRenderer(nullptr), frameTexture(nullptr),
       framebuffer(renWidth, renHeight, TGAImage::RGB), zbuffer(renWidth, renHeight, TGAImage::GRAYSCALE),
       frameOnGPU(false),
-      running(false), showStats(true),
+      running(false), showStats(true), ssaaFactor(2),
       ssaoEnabled(true), ssaoRadius(0.18f), ssaoIntensity(0.85f), ssaoDebug(0),
       windowWidth(winWidth), windowHeight(winHeight), renderWidth(renWidth), renderHeight(renHeight),
       mouseX(0), mouseY(0), mouseDeltaX(0), mouseDeltaY(0), lastMouseX(0), lastMouseY(0), mousePressed(false)
@@ -101,6 +101,7 @@ bool Engine::init()
 
     std::cout << "\n=== RENDERING ===" << std::endl;
     std::cout << "  K            - CUDA or CPU rasterizer" << std::endl;
+    std::cout << "  U            - Supersampling 1x / 2x / 4x" << std::endl;
     std::cout << "  O            - Ambient occlusion on or off" << std::endl;
     std::cout << "  , / .        - Occlusion strength" << std::endl;
     std::cout << "  ;            - Cycle occlusion debug views" << std::endl;
@@ -110,7 +111,7 @@ bool Engine::init()
     std::cout << "  B / C        - Load / clear background image" << std::endl;
     std::cout << "  ESC          - Exit" << std::endl;
 
-    cuda_available = initCudaRasterizer(renderWidth, renderHeight);
+    cuda_available = initCudaRasterizerSS(renderWidth, renderHeight, ssaaFactor);
     // On when the device is there. The two paths agree to a mean byte
     // difference of 0.17 with identical coverage, and the GPU one is roughly
     // two orders of magnitude faster, so there is no reason to open on the
@@ -480,6 +481,12 @@ void Engine::handleEvents()
 
             case SDLK_o:
                 toggleSSAO();
+                break;
+
+            // 1x, 2x, 4x supersampling
+            case SDLK_u:
+                setSSAA(ssaaFactor >= 4 ? 1 : ssaaFactor * 2);
+                std::cout << "SSAA: " << ssaaFactor << "x" << std::endl;
                 break;
 
             case SDLK_COMMA:
@@ -906,9 +913,15 @@ void Engine::renderScene()
         // CUDA rendering path: two passes, same shape as the CPU path
         cudaClearBuffers();
 
+        // the device buffers are ssaaFactor times larger in each axis, so the
+        // viewport has to map to that, not to the display size. everything
+        // downstream (shadow map, SSAO, resolve) follows from this.
+        const int rw = renderWidth * ssaaFactor;
+        const int rh = renderHeight * ssaaFactor;
+
         // PASS 1: depth from the light's point of view, orthographic
         lookat(scene.light.direction, Vec3f(0, 0, 0), scene.camera.up);
-        viewport(renderWidth / 8, renderHeight / 8, renderWidth * 3 / 4, renderHeight * 3 / 4);
+        viewport(rw / 8, rh / 8, rw * 3 / 4, rh * 3 / 4);
         projection(0);
         Matrix lightM = Viewport * Projection * ModelView;
         Matrix lightModelView = ModelView;
@@ -938,7 +951,7 @@ void Engine::renderScene()
 
         // PASS 2: the camera view, sampling that depth buffer
         lookat(scene.camera.position, scene.camera.target, scene.camera.up);
-        viewport(renderWidth / 8, renderHeight / 8, renderWidth * 3 / 4, renderHeight * 3 / 4);
+        viewport(rw / 8, rh / 8, rw * 3 / 4, rh * 3 / 4);
         projection(scene.camera.projectionCoeff());
         ModelView = originalModelView;
 
@@ -1489,6 +1502,26 @@ int Engine::getCudaMesh(Model *model)
     std::cout << "CUDA mesh uploaded: " << nverts << " verts, "
               << nfaces << " faces (handle " << handle << ")" << std::endl;
     return handle;
+}
+
+// Rebuilds the device buffers at the new size. Meshes live in storage that
+// outlives the rasterizer instance, so the uploaded geometry and its textures
+// survive and the handles stay valid.
+void Engine::setSSAA(int factor)
+{
+    if (factor < 1) factor = 1;
+    if (factor > 4) factor = 4;
+    if (factor == ssaaFactor || !cuda_available)
+        return;
+
+    ssaaFactor = factor;
+    if (!initCudaRasterizerSS(renderWidth, renderHeight, ssaaFactor))
+    {
+        std::cout << "SSAA " << ssaaFactor << "x failed to allocate, falling back to 1x"
+                  << std::endl;
+        ssaaFactor = 1;
+        cuda_available = initCudaRasterizerSS(renderWidth, renderHeight, 1);
+    }
 }
 
 void Engine::toggleSSAO()

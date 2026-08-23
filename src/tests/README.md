@@ -6,6 +6,7 @@ window, no SDL, no interaction. Each one asserts and exits non-zero on failure.
     make tests          # regression suite -> tests/bin/
     make test_engine    # end-to-end Engine test (needs SDL2 + the scene graph)
     make test_ssao      # ambient occlusion, same requirements
+    make test_ssaa      # supersampling, same requirements
 
 Run them from `src/` so the relative model paths resolve.
 
@@ -20,6 +21,7 @@ Run them from `src/` so the relative model paths resolve.
 | `test_frustum` | does the GPU mesh path reject geometry that sits fully behind the camera? |
 | `test_engine` | does the real `Engine` render correctly on the CUDA path: scene graph, node transforms, two-pass shadows, light controls? |
 | `test_ssao` | does ambient occlusion darken cavities without touching exposed surfaces, the background, or the geometry? |
+| `test_ssaa` | does supersampling anti-alias the silhouette without moving, rescaling or blurring the image? |
 
 `test_engine` runs headless via SDL's dummy video driver and steps `render()`
 directly instead of calling `run()`. It is the only test that covers the
@@ -30,6 +32,14 @@ just checking that the frame changed. "SSAO changed something" is nearly
 free to satisfy and would pass on a pass that merely dimmed the image; the
 ratio between the two landmarks is what actually separates occlusion from a
 brightness slider.
+
+`test_ssaa` checks two things that have to hold together. Anti-aliasing
+shows up as partial coverage at the silhouette, so it counts edge pixels
+that land between background and surface. But supersampling changes the
+viewport the whole pipeline renders through, so the easy way to get it
+wrong is an image that is smooth but scaled or shifted; the bounding box
+and coverage checks are what catch that, and a smoothness check on its own
+would not. The interior-patch check separates it from a blur.
 
 `test_shaded` is a differential test, so its CPU reference has to be derived
 from `ShadowMappingShader::fragment`, not from the kernel it is checking. An
