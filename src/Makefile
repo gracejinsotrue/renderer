@@ -11,7 +11,7 @@ INCLUDES = -I/usr/include/SDL2
 LIBS = -lSDL2 -lSDL2main -lm
 
 # source files
-SOURCES = main.cpp Engine.cpp model.cpp our_gl.cpp tgaimage.cpp geometry.cpp Scene.cpp SceneNode.cpp
+SOURCES = main.cpp Engine.cpp model.cpp transform.cpp tgaimage.cpp geometry.cpp Scene.cpp SceneNode.cpp
 OBJECTS = $(SOURCES:.cpp=.o)
 TARGET = unified_engine
 
@@ -43,13 +43,16 @@ TESTS = test_cull test_blit test_mesh test_shaded test_frustum
 # Local benchmarking and inspection tools. Not part of the regression
 # suite and not tracked in git, so `tools` skips any that are absent.
 TOOLS = test_wind bench bench_cull bench_tile profile_frame render_png
-TESTOBJS = model.o tgaimage.o geometry.o our_gl.o cuda_triangle.o \
+TESTOBJS = model.o tgaimage.o geometry.o transform.o cuda_triangle.o \
            Scene.o SceneNode.o
+# The CPU reference rasterizer the differential tests compare against. It is
+# test-only: compiled into the test binaries, never into the engine.
+REFSRC = tests/reference_raster.cpp
 
 tests: $(TESTOBJS)
 	mkdir -p tests/bin
 	for t in $(TESTS); do \
-	  $(CXX) $(CXXFLAGS) -I. -o tests/bin/$$t tests/$$t.cpp $(TESTOBJS) \
+	  $(CXX) $(CXXFLAGS) -I. -Itests -o tests/bin/$$t tests/$$t.cpp $(REFSRC) $(TESTOBJS) \
 	    -L/usr/local/cuda/lib64 -lcudart || exit 1; \
 	done
 	@echo "built: $(TESTS) -> tests/bin/"
@@ -58,12 +61,12 @@ tools: $(TESTOBJS)
 	mkdir -p tests/bin
 	for t in $(TOOLS); do \
 	  [ -f tests/$$t.cpp ] || continue; \
-	  $(CXX) $(CXXFLAGS) -I. -o tests/bin/$$t tests/$$t.cpp $(TESTOBJS) \
+	  $(CXX) $(CXXFLAGS) -I. -Itests -o tests/bin/$$t tests/$$t.cpp $(REFSRC) $(TESTOBJS) \
 	    -L/usr/local/cuda/lib64 -lcudart || exit 1; \
 	done
 
 # Headless end-to-end test of the real Engine (needs SDL2 + the scene graph).
-ENGOBJS = Engine.o Scene.o SceneNode.o model.o our_gl.o tgaimage.o \
+ENGOBJS = Engine.o Scene.o SceneNode.o model.o transform.o tgaimage.o \
           geometry.o cuda_triangle.o
 
 test_ssao: $(ENGOBJS)

@@ -17,9 +17,6 @@
 #include <algorithm>
 #include "Engine.h"
 
-Model *model = NULL;
-Vec3f light_dir(1, 1, 1);
-
 static int failures = 0;
 
 static void check(bool ok, const char *what)

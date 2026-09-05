@@ -2,14 +2,7 @@
 
 #include <iostream>
 #include "Engine.h"
-#include "shaders.h"
 
-
-// global variables for shaders
-Model *model = NULL;
-Vec3f light_dir(1, 1, 1);
-const int width = 800;
-const int height = 800;
 
 int main(int argc, char **argv)
 {
@@ -47,15 +40,6 @@ int main(int argc, char **argv)
         empty2->setPosition(Vec3f(-2, 0, 0));
 
         std::cout << "Loaded default scene with test objects" << std::endl;
-    }
-
-    // set up global pointers for shaders temporarily
-    std::vector<SceneNode *> meshNodes;
-    engine.getScene().getAllMeshNodes(meshNodes);
-    if (!meshNodes.empty())
-    {
-        model = meshNodes[0]->model;
-        light_dir = engine.getScene().light.direction;
     }
 
     // print scene hierarchy

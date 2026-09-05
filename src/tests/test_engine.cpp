@@ -16,14 +16,8 @@
 #include <chrono>
 #include "Engine.h"
 
-// shaders.h declares these as extern and Engine.cpp's CPU path uses them.
-// main.cpp normally supplies them; keep the values identical to main.cpp,
-// because the CPU shaders read these globals rather than the engine's own
-// renderWidth/renderHeight.
-Model *model = NULL;
-Vec3f light_dir(1, 1, 1);
-extern const int width = 800;
-extern const int height = 800;
+static const int width = 800;
+static const int height = 800;
 
 static int failures = 0;
 static void check(bool ok, const char *what)

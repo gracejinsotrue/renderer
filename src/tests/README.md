@@ -12,6 +12,10 @@ Run them from `src/` so the relative model paths resolve.
 
 ## Regression suite
 
+`reference_raster.cpp` is the CPU rasterizer. It is not part of the engine --
+nothing in `src/` links it -- and exists only so the differential tests have an
+independent implementation to disagree with.
+
 | program | what it answers |
 |---|---|
 | `test_cull` | does the CUDA path draw the same pixels the CPU rasterizer does, on a real model? |
@@ -41,12 +45,13 @@ wrong is an image that is smooth but scaled or shifted; the bounding box
 and coverage checks are what catch that, and a smoothness check on its own
 would not. The interior-patch check separates it from a blur.
 
-`test_shaded` is a differential test, so its CPU reference has to be derived
-from `ShadowMappingShader::fragment`, not from the kernel it is checking. An
-earlier version copied the kernel's normal handling into the reference, which
-made the two agree by construction and hid a real shading bug. If you change
-how the kernel shades, change the reference to match the CPU shader, never to
-match the kernel.
+`test_shaded` is a differential test, so its CPU reference -- the `struct S`
+shader inside the test -- has to be derived from the shading model, not from
+the kernel it is checking. An earlier version copied the kernel's normal
+handling into the reference, which made the two agree by construction and hid
+a real shading bug. If you change how the kernel shades, work out
+independently what the reference should be; never paste the kernel's version
+into it.
 
 ## Local tools
 

@@ -8,9 +8,8 @@
 #include <unordered_map>
 #include "geometry.h"
 #include "Scene.h" // new scene system!
-#include "our_gl.h"
+#include "transform.h"
 #include "tgaimage.h"
-#include "shaders.h"
 
 extern "C"
 {

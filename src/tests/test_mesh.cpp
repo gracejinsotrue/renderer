@@ -6,7 +6,7 @@
 #include "geometry.h"
 #include "tgaimage.h"
 #include "model.h"
-#include "our_gl.h"
+#include "transform.h"
 extern "C" {
     bool initCudaRasterizer(int,int); void cleanupCudaRasterizer(); void cudaClearBuffers();
     void cudaRenderTriangle(const Vec4f&,const Vec4f&,const Vec4f&,const TGAColor&);

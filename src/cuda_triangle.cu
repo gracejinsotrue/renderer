@@ -80,7 +80,7 @@ CudaVec3 cuda_barycentric(float ax, float ay, float bx, float by,
     float s0y = cy - ay;
     float s1x = bx - ax;
     float s1y = by - ay;
-    // must be P - A for this cross product layout. our_gl.cpp writes A - P,
+    // must be P - A for this cross product layout. the CPU reference writes A - P,
     // but lays its cross product out differently, which cancels the sign.
     float s2x = px - ax;
     float s2y = py - ay;
@@ -200,7 +200,7 @@ void shadow_raster_kernel(const CudaTriangle* triangles,
 // the load broadcasts out of cache rather than thrashing it.
 // zbuffer is int-typed so atomicMax can be used: IEEE754 preserves ordering
 // when positive floats are reinterpreted as int.
-// NOTE the direction. our_gl.cpp keeps the LARGEST depth, so nearest == max.
+// NOTE the direction. the CPU reference keeps the LARGEST depth, so nearest == max.
 // atomicMin here would draw the far surface, and a coverage-only test cannot
 // see the difference because the set of lit pixels is identical either way.
 __global__
@@ -323,9 +323,9 @@ void tiled_raster_kernel(const CudaTriangle* triangles,
                 float ez = mat.mit[6]*ox + mat.mit[7]*oy + mat.mit[8]*oz;
                 float ml = sqrtf(ex*ex + ey*ey + ez*ez);
                 if (ml > 1e-12f) {
-                    // used as-is, matching ShadowMappingShader::fragment. MIT
-                    // is built from ModelView alone, which is affine, so there
-                    // is no perspective term to correct for, and a world-space
+                    // used as-is, not reoriented toward the camera. MIT is
+                    // built from ModelView alone, which is affine, so there is
+                    // no perspective term to correct for, and a world-space
                     // normal map routinely produces normals facing away.
                     nxi = ex/ml; nyi = ey/ml; nzi = ez/ml;
                 }
@@ -379,7 +379,8 @@ void tiled_raster_kernel(const CudaTriangle* triangles,
                 br = d.z * 255.0f; bg = d.y * 255.0f; bb = d.x * 255.0f;
             }
 
-            // same constants as ShadowMappingShader::fragment on the CPU
+            // tests/test_shaded.cpp checks these constants against an
+            // independently derived CPU reference
             float amb = 20.0f;
             float lit = shadow * mat.lintensity * (0.8f * diff + 0.3f * spec);
             float cr = amb + br * lit * mat.lcr;
@@ -705,7 +706,7 @@ void mesh_setup_kernel(const float* verts, const int* faces, int nfaces,
     outside = true;
     for (int k = 0; k < 3; k++) if (cv[k].y <= cv[k].w) outside = false;
     if (outside) { atomicAdd(&stats[1], 1); return; }
-    // same cull test and sign convention as the host path and our_gl.cpp
+    // same cull test and sign convention as the host path and the CPU reference
     float facing = (sx[1] - sx[0]) * (sy[2] - sy[0])
                  - (sy[1] - sy[0]) * (sx[2] - sx[0]);
     if (facing >= 0.0f) { atomicAdd(&stats[0], 1); return; }
@@ -1172,7 +1173,7 @@ public:
         float sx1 = v1x / v1w, sy1 = v1y / v1w;
         float sx2 = v2x / v2w, sy2 = v2y / v2w;
 
-        // backface cull, same test and sign convention as our_gl.cpp: the
+        // backface cull, same test and sign convention as the CPU reference: the
         // sign of the screen-space edge cross product says which way the
         // triangle faces.
         float facing = (sx1 - sx0) * (sy2 - sy0) - (sy1 - sy0) * (sx2 - sx0);

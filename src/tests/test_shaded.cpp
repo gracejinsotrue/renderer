@@ -10,7 +10,7 @@
 #include "geometry.h"
 #include "tgaimage.h"
 #include "model.h"
-#include "our_gl.h"
+#include "reference_raster.h"
 
 extern "C" {
     bool initCudaRasterizer(int,int); void cleanupCudaRasterizer(); void cudaClearBuffers();
@@ -125,10 +125,9 @@ int main(int argc,char**argv){
             // Normals are used as they come out of MIT. Do NOT reorient them
             // toward the camera: near a silhouette an interpolated or mapped
             // normal legitimately points away, and forcing z >= 0 flips the
-            // sign of n.l discontinuously. This reference checks the kernel
-            // against ShadowMappingShader::fragment, which does not reorient,
-            // so neither does this. An earlier version did, which made the
-            // test agree with a kernel bug instead of catching it.
+            // sign of n.l discontinuously. An earlier version did reorient,
+            // which made the test agree with a kernel bug instead of
+            // catching it.
             Vec3f e = proj<3>(mit*embed<4>(nn, 0.f));
             if (e.norm()>1e-12f) e = e.normalize();
             Vec2f uv = uvc[0]*persp_bar.x + uvc[1]*persp_bar.y + uvc[2]*persp_bar.z;

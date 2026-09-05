@@ -7,7 +7,7 @@
 #include "geometry.h"
 #include "tgaimage.h"
 #include "model.h"
-#include "our_gl.h"
+#include "transform.h"
 
 extern "C" {
     bool initCudaRasterizer(int,int); void cleanupCudaRasterizer(); void cudaClearBuffers();
