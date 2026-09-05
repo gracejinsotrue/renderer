@@ -20,8 +20,6 @@ public:
     // camera state and callers may still set it.
     float fov;
 
-    // Camera(Vec3f pos = Vec3f(0, 0, 3), Vec3f tgt = Vec3f(0, 0, 0), Vec3f u = Vec3f(0, 1, 0))
-    //     : position(pos), target(tgt), up(u), fov(-1.0f) {}
     Camera(Vec3f pos = Vec3f(0, 0, 3), Vec3f tgt = Vec3f(0, 0, 0), Vec3f u = Vec3f(0, 1, 0))
         : position(pos), target(tgt), up(u), fov(-0.8f) {}
 
