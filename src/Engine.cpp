@@ -9,8 +9,7 @@
 
 Engine::Engine(int winWidth, int winHeight, int renWidth, int renHeight)
     : window(nullptr), sdlRenderer(nullptr), frameTexture(nullptr),
-      framebuffer(renWidth, renHeight, TGAImage::RGB), zbuffer(renWidth, renHeight, TGAImage::GRAYSCALE),
-      frameOnGPU(false),
+      captureStaging(renWidth, renHeight, TGAImage::RGB),
       running(false), showStats(true), ssaaFactor(2),
       ssaoEnabled(true), ssaoRadius(0.18f), ssaoIntensity(0.85f), ssaoDebug(0),
       windowWidth(winWidth), windowHeight(winHeight), renderWidth(renWidth), renderHeight(renHeight),
@@ -19,9 +18,6 @@ Engine::Engine(int winWidth, int winHeight, int renWidth, int renHeight)
 {
     // init imput state
     memset(keys, 0, sizeof(keys));
-
-    // shadowbuffer: sized here, and the shaders read its size from our_gl
-    resizeShadowBuffer(renderWidth, renderHeight);
 }
 
 Engine::~Engine()
@@ -100,7 +96,6 @@ bool Engine::init()
     std::cout << "  H            - Reset camera" << std::endl;
 
     std::cout << "\n=== RENDERING ===" << std::endl;
-    std::cout << "  K            - CUDA or CPU rasterizer" << std::endl;
     std::cout << "  U            - Supersampling 1x / 2x / 4x" << std::endl;
     std::cout << "  O            - Ambient occlusion on or off" << std::endl;
     std::cout << "  , / .        - Occlusion strength" << std::endl;
@@ -112,19 +107,11 @@ bool Engine::init()
     std::cout << "  ESC          - Exit" << std::endl;
 
     cuda_available = initCudaRasterizerSS(renderWidth, renderHeight, ssaaFactor);
-    // On when the device is there. The two paths agree to a mean byte
-    // difference of 0.17 with identical coverage, and the GPU one is roughly
-    // two orders of magnitude faster, so there is no reason to open on the
-    // slow path. K still switches back for comparison.
-    use_cuda_rendering = cuda_available;
-
-    if (cuda_available)
+    if (!cuda_available)
     {
-        std::cout << "CUDA rasterizer ENABLED - press 'K' for the CPU path" << std::endl;
-    }
-    else
-    {
-        std::cout << "CUDA rasterizer not available - using CPU only" << std::endl;
+        std::cerr << "CUDA rasterizer failed to initialize. Rendering happens "
+                     "on the GPU; there is no CPU fallback." << std::endl;
+        return false;
     }
 
     return true;
@@ -473,10 +460,6 @@ void Engine::handleEvents()
 
             case SDLK_ESCAPE:
                 running = false;
-                break;
-
-            case SDLK_k:
-                toggleCudaRendering();
                 break;
 
             case SDLK_o:
@@ -830,59 +813,9 @@ void Engine::updateCamera()
 
 void Engine::render()
 {
-    bool cudaPath = use_cuda_rendering && cuda_available;
-    frameOnGPU = false;
-
-    // cheap memset, and it's what gets shown if the scene turns out to be empty
-    framebuffer.clear();
-
-    if (!cudaPath)
-    {
-        for (int i = 0; i < renderWidth * renderHeight; i++)
-        {
-            zbuffer.set(i % renderWidth, i / renderWidth, TGAColor(0));
-        }
-
-        // draw the background AND THEN RENDER 3D SCENE
-        drawBackground();
-    }
-    // the CUDA path owns both buffers on the device and overwrites every
-    // pixel, so the host zbuffer clear and the background blit would be
-    // discarded. skipping them changes nothing on screen.
-
-    // then render 3D scene (but don't clear framebuffer in renderScene)
     renderScene();
-
-    // nothing composites onto the frame on the host, so a CUDA frame stays in
-    // device memory until present() blits it or captureFrame() asks for it.
 }
 
-void Engine::drawBackground()
-{
-    if (!scene.background)
-        return;
-
-    // scale and draw background to fill the framebuffer
-    int bgWidth = scene.background->get_width();
-    int bgHeight = scene.background->get_height();
-
-    for (int y = 0; y < renderHeight; y++)
-    {
-        for (int x = 0; x < renderWidth; x++)
-        {
-            // Map framebuffer coordinates to background coordinates
-            int bgX = (x * bgWidth) / renderWidth;
-            int bgY = (y * bgHeight) / renderHeight;
-
-            // Clamp to background bounds
-            bgX = std::max(0, std::min(bgWidth - 1, bgX));
-            bgY = std::max(0, std::min(bgHeight - 1, bgY));
-
-            TGAColor bgColor = scene.background->get(bgX, bgY);
-            framebuffer.set(x, y, bgColor);
-        }
-    }
-}
 
 void Engine::renderScene()
 {
@@ -894,6 +827,10 @@ void Engine::renderScene()
     // get all visible mesh nodes instead of single animated model
     std::vector<SceneNode *> visibleMeshes;
     scene.getVisibleMeshNodes(visibleMeshes);
+
+    // before the early return: present() blits whatever is in device memory,
+    // so an empty scene has to clear it or the last drawn frame persists.
+    cudaClearBuffers();
 
     if (visibleMeshes.empty())
     {
@@ -908,227 +845,119 @@ void Engine::renderScene()
     // Store original ModelView
     Matrix originalModelView = ModelView;
 
-    if (use_cuda_rendering && cuda_available)
+
+    // the device buffers are ssaaFactor times larger in each axis, so the
+    // viewport has to map to that, not to the display size. everything
+    // downstream (shadow map, SSAO, resolve) follows from this.
+    const int rw = renderWidth * ssaaFactor;
+    const int rh = renderHeight * ssaaFactor;
+
+    // PASS 1: depth from the light's point of view, orthographic
+    lookat(scene.light.direction, Vec3f(0, 0, 0), scene.camera.up);
+    viewport(rw / 8, rh / 8, rw * 3 / 4, rh * 3 / 4);
+    projection(0);
+    Matrix lightM = Viewport * Projection * ModelView;
+    Matrix lightModelView = ModelView;
+
+    float ident[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+    float nolight[3] = {0, 0, 1};
+    float white[3] = {1.f, 1.f, 1.f};
+
+    for (SceneNode *meshNode : visibleMeshes)
     {
-        // CUDA rendering path: two passes, same shape as the CPU path
-        cudaClearBuffers();
-
-        // the device buffers are ssaaFactor times larger in each axis, so the
-        // viewport has to map to that, not to the display size. everything
-        // downstream (shadow map, SSAO, resolve) follows from this.
-        const int rw = renderWidth * ssaaFactor;
-        const int rh = renderHeight * ssaaFactor;
-
-        // PASS 1: depth from the light's point of view, orthographic
-        lookat(scene.light.direction, Vec3f(0, 0, 0), scene.camera.up);
-        viewport(rw / 8, rh / 8, rw * 3 / 4, rh * 3 / 4);
-        projection(0);
-        Matrix lightM = Viewport * Projection * ModelView;
-        Matrix lightModelView = ModelView;
-
-        float ident[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
-        float nolight[3] = {0, 0, 1};
-        float white[3] = {1.f, 1.f, 1.f};
-
-        for (SceneNode *meshNode : visibleMeshes)
-        {
-            int mesh = getCudaMesh(meshNode->model);
-            if (mesh < 0)
-                continue;
-            Matrix lm = lightM * meshNode->getWorldMatrix();
-            Matrix lc = Projection * lightModelView * meshNode->getWorldMatrix();
-            float mvp[16], clip[16];
-            for (int r = 0; r < 4; r++)
-                for (int c = 0; c < 4; c++)
-                {
-                    mvp[r * 4 + c] = lm[r][c];
-                    clip[r * 4 + c] = lc[r][c];
-                }
-            cudaDrawMesh(mesh, mvp, clip, ident, nolight, white, 1.0f,
-                         NULL, 0.f, 255, 255, 255);
-        }
-        cudaRenderShadowPass();
-
-        // PASS 2: the camera view, sampling that depth buffer
-        lookat(scene.camera.position, scene.camera.target, scene.camera.up);
-        viewport(rw / 8, rh / 8, rw * 3 / 4, rh * 3 / 4);
-        projection(scene.camera.projectionCoeff());
-        ModelView = originalModelView;
-
-        for (SceneNode *meshNode : visibleMeshes)
-        {
-            Model *model = meshNode->model;
-            int mesh = getCudaMesh(model);
-            if (mesh < 0)
-                continue;
-
-            Matrix nodeTransform = meshNode->getWorldMatrix();
-            Matrix currentModelView = originalModelView * nodeTransform;
-            Matrix clipTransform = Projection * currentModelView;
-            Matrix transform = Viewport * clipTransform;
-
-            // eye space, to match the light below. not Projection*ModelView:
-            // the light is carried by currentModelView alone.
-            Matrix MIT = currentModelView.invert_transpose();
-            Vec3f l = proj<3>(currentModelView * embed<4>(scene.light.direction, 0.f)).normalize();
-
-            // screen space -> shadow-map space. NOTE: adjugate() returns the
-            // COFACTOR matrix, so adjugate()/det() is the inverse-TRANSPOSE.
-            // invert() is the real inverse.
-            Matrix lightXform = lightM * nodeTransform;
-            Matrix camXform = transform;
-            Matrix shadowXform = lightXform * camXform.invert();
-
-            float mvp[16], clip[16], mit[16], msh[16];
-            for (int r = 0; r < 4; r++)
-                for (int c = 0; c < 4; c++)
-                {
-                    mvp[r * 4 + c] = transform[r][c];
-                    clip[r * 4 + c] = clipTransform[r][c];
-                    mit[r * 4 + c] = MIT[r][c];
-                    msh[r * 4 + c] = shadowXform[r][c];
-                }
-            float light[3] = {l.x, l.y, l.z};
-            float lightColor[3] = {
-                std::max(0.0f, scene.light.color.x),
-                std::max(0.0f, scene.light.color.y),
-                std::max(0.0f, scene.light.color.z)};
-            float lightIntensity = std::max(0.0f, scene.light.intensity);
-
-            // Shadow bias. Depth spans 0..255 regardless of world scale, so
-            // this is a fraction of that range, not a world distance. 2.0 gives
-            // contact shadows without acne; tune per scene if needed.
-            cudaDrawMesh(mesh, mvp, clip, mit, light, lightColor, lightIntensity,
-                         msh, 2.0f, 200, 170, 150);
-        }
-
-        // Ambient occlusion, straight over the finished device frame. The
-        // depth buffer and the eye-space normals are already there, so this
-        // costs one more pass and nothing comes back to the host.
-        //
-        // Viewport * Projection is shared by every mesh in the frame (only
-        // ModelView differs), so inverting it lets the kernel rebuild eye-space
-        // positions from depth alone instead of storing a position buffer.
-        if (ssaoEnabled && ssaoIntensity > 0.f)
-        {
-            Matrix vp = Viewport * Projection;
-            Matrix inv_vp = vp.invert();
-            float vp16[16], inv16[16];
-            for (int r = 0; r < 4; r++)
-                for (int c = 0; c < 4; c++)
-                {
-                    vp16[r * 4 + c] = vp[r][c];
-                    inv16[r * 4 + c] = inv_vp[r][c];
-                }
-            cudaApplySSAO(inv16, vp16, ssaoRadius, ssaoIntensity, 0.02f, ssaoDebug);
-        }
-
-        // no readback: leave the frame on the device for present() to blit.
-        // the pending kernels are flushed by whichever of cudaBlitToTexture /
-        // cudaCopyResults runs first, so the GPU keeps working meanwhile.
-        frameOnGPU = true;
+        int mesh = getCudaMesh(meshNode->model);
+        if (mesh < 0)
+            continue;
+        Matrix lm = lightM * meshNode->getWorldMatrix();
+        Matrix lc = Projection * lightModelView * meshNode->getWorldMatrix();
+        float mvp[16], clip[16];
+        for (int r = 0; r < 4; r++)
+            for (int c = 0; c < 4; c++)
+            {
+                mvp[r * 4 + c] = lm[r][c];
+                clip[r * 4 + c] = lc[r][c];
+            }
+        cudaDrawMesh(mesh, mvp, clip, ident, nolight, white, 1.0f,
+                     NULL, 0.f, 255, 255, 255);
     }
-    else
+    cudaRenderShadowPass();
+
+    // PASS 2: the camera view, sampling that depth buffer
+    lookat(scene.camera.position, scene.camera.target, scene.camera.up);
+    viewport(rw / 8, rh / 8, rw * 3 / 4, rh * 3 / 4);
+    projection(scene.camera.projectionCoeff());
+    ModelView = originalModelView;
+
+    for (SceneNode *meshNode : visibleMeshes)
     {
-        // Original CPU rendering path
-        clearShadowBuffer();
+        Model *model = meshNode->model;
+        int mesh = getCudaMesh(model);
+        if (mesh < 0)
+            continue;
 
-        Matrix M;
-        {
-            // render from light's perspective for shadow mapping
-            lookat(scene.light.direction, Vec3f(0, 0, 0), scene.camera.up);
-            viewport(renderWidth / 8, renderHeight / 8, renderWidth * 3 / 4, renderHeight * 3 / 4);
-            projection(0); // Orthographic for directional light
+        Matrix nodeTransform = meshNode->getWorldMatrix();
+        Matrix currentModelView = originalModelView * nodeTransform;
+        Matrix clipTransform = Projection * currentModelView;
+        Matrix transform = Viewport * clipTransform;
 
-            M = Viewport * Projection * ModelView;
+        // eye space, to match the light below. not Projection*ModelView:
+        // the light is carried by currentModelView alone.
+        Matrix MIT = currentModelView.invert_transpose();
+        Vec3f l = proj<3>(currentModelView * embed<4>(scene.light.direction, 0.f)).normalize();
 
-            // create temporary buffers for shadow pass
-            TGAImage tempFrame(renderWidth, renderHeight, TGAImage::RGB);
-            TGAImage tempZ(renderWidth, renderHeight, TGAImage::GRAYSCALE);
+        // screen space -> shadow-map space. NOTE: adjugate() returns the
+        // COFACTOR matrix, so adjugate()/det() is the inverse-TRANSPOSE.
+        // invert() is the real inverse.
+        Matrix lightXform = lightM * nodeTransform;
+        Matrix camXform = transform;
+        Matrix shadowXform = lightXform * camXform.invert();
 
-            // render all visible meshes for shadows
-            for (SceneNode *meshNode : visibleMeshes)
+        float mvp[16], clip[16], mit[16], msh[16];
+        for (int r = 0; r < 4; r++)
+            for (int c = 0; c < 4; c++)
             {
-                Model *model = meshNode->model;
-                Matrix nodeTransform = meshNode->getWorldMatrix();
-                Matrix shadowModelView = ModelView * nodeTransform;
-
-                // Set global shader variables -- this is also a temporary solution
-                ::model = model; // global variable for shaders
-
-                DepthShader depthShader;
-                Matrix oldModelView = ModelView;
-                ModelView = shadowModelView;
-
-                for (int i = 0; i < model->nfaces(); i++)
-                {
-                    Vec4f screen_coords[3];
-                    for (int j = 0; j < 3; j++)
-                    {
-                        screen_coords[j] = depthShader.vertex(i, j);
-                    }
-                    triangle(screen_coords, depthShader, tempFrame, tempZ);
-                }
-
-                ModelView = oldModelView;
+                mvp[r * 4 + c] = transform[r][c];
+                clip[r * 4 + c] = clipTransform[r][c];
+                mit[r * 4 + c] = MIT[r][c];
+                msh[r * 4 + c] = shadowXform[r][c];
             }
-        }
+        float light[3] = {l.x, l.y, l.z};
+        float lightColor[3] = {
+            std::max(0.0f, scene.light.color.x),
+            std::max(0.0f, scene.light.color.y),
+            std::max(0.0f, scene.light.color.z)};
+        float lightIntensity = std::max(0.0f, scene.light.intensity);
 
-        // PASS 2: Main rendering with shadows (preserve background)
-        {
-            // restore camera perspective
-            lookat(scene.camera.position, scene.camera.target, scene.camera.up);
-            viewport(renderWidth / 8, renderHeight / 8, renderWidth * 3 / 4, renderHeight * 3 / 4);
-            projection(scene.camera.projectionCoeff());
-            ModelView = originalModelView;
-
-            // only clear the Z-buffer, keep the background in framebuffer
-            for (int i = 0; i < renderWidth * renderHeight; i++)
-            {
-                zbuffer.set(i % renderWidth, i / renderWidth, TGAColor(0));
-            }
-
-            // render ALL visible meshes
-            for (SceneNode *meshNode : visibleMeshes)
-            {
-                Model *model = meshNode->model;
-                Matrix nodeTransform = meshNode->getWorldMatrix();
-                Matrix currentModelView = originalModelView * nodeTransform;
-
-                Matrix current_transform = Viewport * Projection * currentModelView;
-                // adjugate()/det() is the inverse-TRANSPOSE, not the inverse.
-                // invert() is the one wanted here.
-                Matrix shadow_transform = M * current_transform.invert();
-
-                // set global shader variables -- temporary solution until i figure something out better
-                ::model = model;
-                light_dir = scene.light.direction;
-
-                // uniform_M carries the light, uniform_MIT the normal. both
-                // must land in the same space, so both are ModelView-only.
-                ShadowMappingShader shader(currentModelView,
-                                           currentModelView.invert_transpose(),
-                                           shadow_transform,
-                                           scene.light.color,
-                                           scene.light.intensity);
-
-                Matrix oldModelView = ModelView;
-                ModelView = currentModelView;
-
-                for (int i = 0; i < model->nfaces(); i++)
-                {
-                    Vec4f screen_coords[3];
-                    for (int j = 0; j < 3; j++)
-                    {
-                        screen_coords[j] = shader.vertex(i, j);
-                    }
-                    triangle(screen_coords, shader, framebuffer, zbuffer);
-                }
-
-                ModelView = oldModelView;
-            }
-        }
+        // Shadow bias. Depth spans 0..255 regardless of world scale, so
+        // this is a fraction of that range, not a world distance. 2.0 gives
+        // contact shadows without acne; tune per scene if needed.
+        cudaDrawMesh(mesh, mvp, clip, mit, light, lightColor, lightIntensity,
+                     msh, 2.0f, 200, 170, 150);
     }
+
+    // Ambient occlusion, straight over the finished device frame. The
+    // depth buffer and the eye-space normals are already there, so this
+    // costs one more pass and nothing comes back to the host.
+    //
+    // Viewport * Projection is shared by every mesh in the frame (only
+    // ModelView differs), so inverting it lets the kernel rebuild eye-space
+    // positions from depth alone instead of storing a position buffer.
+    if (ssaoEnabled && ssaoIntensity > 0.f)
+    {
+        Matrix vp = Viewport * Projection;
+        Matrix inv_vp = vp.invert();
+        float vp16[16], inv16[16];
+        for (int r = 0; r < 4; r++)
+            for (int c = 0; c < 4; c++)
+            {
+                vp16[r * 4 + c] = vp[r][c];
+                inv16[r * 4 + c] = inv_vp[r][c];
+            }
+        cudaApplySSAO(inv16, vp16, ssaoRadius, ssaoIntensity, 0.02f, ssaoDebug);
+    }
+
+    // no readback: the frame stays in device memory until present() blits it
+    // or captureFrame() asks for it, so the GPU keeps working meanwhile.
 
     // restore original ModelView
     ModelView = originalModelView;
@@ -1142,32 +971,9 @@ void Engine::present()
 
     if (SDL_LockTexture(frameTexture, NULL, &pixels, &pitch) == 0)
     {
-        if (frameOnGPU)
-        {
-            // device buffer is already RGB24 in SDL row order: straight DMA,
-            // no swizzle, no flip, no per-pixel host work
-            cudaBlitToTexture(pixels, pitch);
-        }
-        else
-        {
-            unsigned char *tgaData = framebuffer.buffer();
-            unsigned char *sdlPixels = (unsigned char *)pixels;
-
-            // convert BGR to RGB and flip vertically
-            for (int y = 0; y < renderHeight; y++)
-            {
-                for (int x = 0; x < renderWidth; x++)
-                {
-                    int tgaIndex = ((renderHeight - 1 - y) * renderWidth + x) * 3;
-                    int sdlIndex = (y * renderWidth + x) * 3;
-
-                    sdlPixels[sdlIndex + 0] = tgaData[tgaIndex + 2]; // R
-                    sdlPixels[sdlIndex + 1] = tgaData[tgaIndex + 1]; // G
-                    sdlPixels[sdlIndex + 2] = tgaData[tgaIndex + 0]; // B
-                }
-            }
-        }
-
+        // device buffer is already RGB24 in SDL row order: straight DMA,
+        // no swizzle, no flip, no per-pixel host work
+        cudaBlitToTexture(pixels, pitch);
         SDL_UnlockTexture(frameTexture);
     }
 
@@ -1193,16 +999,12 @@ void Engine::present()
 
 void Engine::captureFrame(const std::string &filename)
 {
-    // writing a TGA needs the frame on the host
-    if (frameOnGPU)
-    {
-        cudaCopyResults(framebuffer);
-        frameOnGPU = false;
-    }
+    // writing a TGA is the one thing that still needs the frame on the host
+    cudaCopyResults(captureStaging);
 
-    framebuffer.flip_vertically();
-    framebuffer.write_tga_file(filename.c_str());
-    framebuffer.flip_vertically(); // Flip back for next frame
+    captureStaging.flip_vertically();
+    captureStaging.write_tga_file(filename.c_str());
+    captureStaging.flip_vertically();
 }
 
 void Engine::captureSequence(const std::string &baseName, int frameCount, float duration)
@@ -1406,15 +1208,3 @@ void Engine::setSSAORadius(float v)
     std::cout << "SSAO radius: " << ssaoRadius << std::endl;
 }
 
-void Engine::toggleCudaRendering()
-{
-    if (cuda_available)
-    {
-        use_cuda_rendering = !use_cuda_rendering;
-        std::cout << "CUDA rendering: " << (use_cuda_rendering ? "ENABLED" : "DISABLED") << std::endl;
-    }
-    else
-    {
-        std::cout << "CUDA not available" << std::endl;
-    }
-}

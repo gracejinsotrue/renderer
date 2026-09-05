@@ -75,14 +75,6 @@ static FrameStat renderAndStat(Engine &e, const char *save = NULL)
     return statOf(tmp);
 }
 
-// Puts the engine on the requested path regardless of what the default is,
-// so these tests do not silently invert when that default changes.
-static void setCudaPath(Engine &engine, bool want)
-{
-    if (engine.isCudaAvailable() && engine.isCudaRenderingEnabled() != want)
-        engine.toggleCudaRendering();
-}
-
 int main(int argc, char **argv)
 {
     const char *path = (argc > 1) ? argv[1] : "../obj/african_head.obj";
@@ -118,10 +110,6 @@ int main(int argc, char **argv)
     if (b) b->localTransform.position = Vec3f(1.2f, 0.f, 0.f);
     check(a && b, "two mesh nodes in the scene");
 
-    // Set the path explicitly. This used to be a bare toggle with a comment
-    // saying the engine starts disabled; when the default flipped, every
-    // "CUDA path" section below silently ran on the CPU instead.
-    setCudaPath(engine, true);
     printf("\n--- CUDA path renders\n");
 
     FrameStat f1 = renderAndStat(engine, "/tmp/eng_cuda.tga");
@@ -205,26 +193,6 @@ int main(int argc, char **argv)
         engine.getScene().deleteNode(nm);
     }
     if (b) b->localTransform.position = saved;
-
-    printf("\n--- CPU path still works\n");
-    setCudaPath(engine, false);
-    FrameStat f9 = renderAndStat(engine, "/tmp/eng_cpu.tga");
-    printf("  lit pixels: %lld\n", f9.lit);
-    check(f9.lit > 2000, "CPU path still produces a non-blank frame");
-
-    scene.light.intensity = 0.0f;
-    FrameStat fCpuLightOff = renderAndStat(engine);
-    check(fCpuLightOff.hash != f9.hash, "zero direct light changes the CPU frame");
-    check(fCpuLightOff.sum_r < f9.sum_r, "zero direct light reduces CPU brightness");
-
-    scene.light.color = Vec3f(1.0f, 0.2f, 0.2f);
-    scene.light.intensity = savedLightIntensity;
-    FrameStat fCpuWarm = renderAndStat(engine);
-    check(fCpuWarm.hash != f9.hash, "light colour changes the CPU frame");
-    check(fCpuWarm.sum_r > fCpuWarm.sum_b, "warm CPU light biases the red channel");
-
-    scene.light.color = savedLightColor;
-    scene.light.intensity = savedLightIntensity;
 
     printf("\n%s (%d failure(s))\n", failures ? "FAILED" : "OK", failures);
     return failures ? 1 : 0;

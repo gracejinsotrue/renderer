@@ -58,19 +58,14 @@ private:
     SDL_Texture *frameTexture;
 
     Scene scene;
-    TGAImage framebuffer;
-    TGAImage zbuffer;
+    // host copy, written only when captureFrame() asks for a TGA
+    TGAImage captureStaging;
 
     // for timing
     std::chrono::high_resolution_clock::time_point lastTime;
     float deltaTime;
 
-    // use cuda
     bool cuda_available;
-    bool use_cuda_rendering;
-    // true when the finished frame still lives only in device memory, so
-    // present() can blit it directly instead of going through `framebuffer`
-    bool frameOnGPU;
     // Model -> device mesh. meshes are immutable once loaded, so geometry is
     // uploaded once and only re-transformed on the GPU each frame.
     std::unordered_map<Model *, int> cudaMeshes;
@@ -87,14 +82,14 @@ private:
     bool running;
     bool showStats;
 
-    // Supersampling factor for the CUDA path. 1 disables it. The whole
+    // Supersampling factor. 1 disables it. The whole
     // pipeline (raster, shadows, SSAO) runs at the larger size and the frame
     // is averaged back down on the device, so edges, textures and specular
     // highlights are all anti-aliased.
     int ssaaFactor;
 
     // SSAO. radius is in world units, so it scales with the scene rather
-    // than the framebuffer; intensity 0 turns the pass off entirely.
+    // than the render target; intensity 0 turns the pass off entirely.
     bool ssaoEnabled;
     float ssaoRadius;
     float ssaoIntensity;
@@ -155,8 +150,6 @@ public:
     void resetCamera();
     void toggleCameraMode();
 
-    // Rendering
-    void drawBackground();
     void renderScene();
 
     // Frame capture
@@ -172,10 +165,7 @@ public:
         float fps = 1.0f / deltaTime;
         return std::min(fps, 60.0f);
     }
-    // for cuda
-    void toggleCudaRendering();
     bool isCudaAvailable() const { return cuda_available; }
-    bool isCudaRenderingEnabled() const { return use_cuda_rendering; }
 
     void setSSAA(int factor);
     int getSSAA() const { return ssaaFactor; }
