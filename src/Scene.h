@@ -65,6 +65,9 @@ public:
     Camera camera;
     Light light;
     TGAImage *background;
+    // bumped on every load and clear. a fresh TGAImage can reuse the address
+    // of the one just freed, so consumers cannot detect a change by pointer.
+    unsigned backgroundVersion;
 
     Scene();
     ~Scene();

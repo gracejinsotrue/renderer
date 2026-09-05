@@ -39,7 +39,8 @@ void Camera::lookAt(Vec3f eye, Vec3f center, Vec3f up_vec)
 }
 
 // scene implementation
-Scene::Scene() : selectedNode(nullptr), nodeCounter(0), background(nullptr)
+Scene::Scene() : selectedNode(nullptr), nodeCounter(0), background(nullptr),
+                 backgroundVersion(0)
 {
     rootNode = std::make_unique<SceneNode>("Root", SceneNode::EMPTY);
 }
@@ -213,6 +214,7 @@ void Scene::loadBackground(const std::string &filename)
 {
     clearBackground();
     background = new TGAImage();
+    backgroundVersion++;
     if (background->read_tga_file(filename.c_str()))
     {
         std::cout << "Loaded background: " << filename << std::endl;
@@ -231,6 +233,7 @@ void Scene::clearBackground()
     {
         delete background;
         background = nullptr;
+        backgroundVersion++;
         std::cout << "Background cleared" << std::endl;
     }
 }

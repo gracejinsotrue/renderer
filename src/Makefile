@@ -81,6 +81,10 @@ test_ssaa: $(ENGOBJS)
 	  tests/test_ssaa.cpp $(ENGOBJS) $(LIBS) \
 	  -L/usr/local/cuda/lib64 -lcudart
 
+test_background: $(ENGOBJS)
+	mkdir -p tests/bin
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -I. -o tests/bin/test_background 	  tests/test_background.cpp $(ENGOBJS) $(LIBS) 	  -L/usr/local/cuda/lib64 -lcudart
+
 test_engine: $(ENGOBJS)
 	mkdir -p tests/bin
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -I. -o tests/bin/test_engine \
@@ -115,7 +119,7 @@ setup:
 capture-rotation: $(TARGET)
 	./$(TARGET) --capture-sequence rotation 360 10.0
 
-.PHONY: all tests test_engine test_ssao test_ssaa clean install-deps install-deps-mac run debug setup capture-rotation
+.PHONY: all tests test_engine test_ssao test_ssaa test_background clean install-deps install-deps-mac run debug setup capture-rotation
 
 # header dependencies come from -MMD -MP via $(DEPS); there is no hand-written
 # list to keep in sync.

@@ -839,6 +839,26 @@ void downsample_kernel(const unsigned char* src, unsigned char* dst,
     o[2] = (unsigned char)((acc[2] + n / 2) / n);
 }
 
+// Stretches the background image over the whole render target, under the
+// geometry: clear() runs this in place of the framebuffer memset.
+__global__
+void background_kernel(unsigned char* framebuffer, cudaTextureObject_t bg,
+                       int width, int height)
+{
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= width || y >= height) return;
+
+    float u = (x + 0.5f) / (float)width;
+    float v = (y + 0.5f) / (float)height;
+    float4 c = tex2D<float4>(bg, u, v);
+
+    unsigned char* o = framebuffer + ((size_t)y * width + x) * 3;
+    o[0] = (unsigned char)(c.z * 255.0f);
+    o[1] = (unsigned char)(c.y * 255.0f);
+    o[2] = (unsigned char)(c.x * 255.0f);
+}
+
 class CudaTriangleRasterizer {
 private:
     CudaTriangle* d_triangles;
@@ -879,6 +899,12 @@ private:
     unsigned char* d_resolve;   // NULL when ss == 1: the frame is already 1:1
     int tiles_x, tiles_y, num_tiles;
 
+    // optional background image, composited by clear() instead of a memset.
+    // it does not survive a resize; the engine re-uploads it.
+    cudaArray_t d_bg_arr;
+    cudaTextureObject_t d_bg_tex;
+    bool has_bg;
+
     // per-stage GPU timing. nsys can't get a GPU timeline through WSL2 and
     // ncu needs a driver permission change, so the kernels time themselves.
     cudaEvent_t ev_start, ev_upload, ev_bin, ev_raster;
@@ -896,7 +922,8 @@ public:
     CudaTriangleRasterizer(int out_w, int out_h, int ss_factor)
         : width(out_w * ss_factor), height(out_h * ss_factor),
           out_width(out_w), out_height(out_h), ss(ss_factor),
-          d_resolve(NULL), initialized(false),
+          d_resolve(NULL), d_bg_arr(NULL), d_bg_tex(0), has_bg(false),
+          initialized(false),
           stat_submitted(0), stat_culled_back(0), stat_culled_offscreen(0) {
         int w = width, h = height;
         tiles_x = (w + TILE_W - 1) / TILE_W;
@@ -1010,6 +1037,7 @@ public:
             cudaFree(d_ssao_inv_vp);
             cudaFree(d_ssao_vp);
             if (d_resolve) cudaFree(d_resolve);
+            clearBackground();
             cudaEventDestroy(ev_start);
             cudaEventDestroy(ev_upload);
             cudaEventDestroy(ev_bin);
@@ -1094,7 +1122,14 @@ public:
     void clear() {
         if (!initialized) return;
 
-        cudaMemset(d_framebuffer, 0, width * height * 3);
+        if (has_bg) {
+            dim3 block(16, 16);
+            dim3 grid((width + 15) / 16, (height + 15) / 16);
+            background_kernel<<<grid, block>>>(d_framebuffer, d_bg_tex,
+                                               width, height);
+        } else {
+            cudaMemset(d_framebuffer, 0, width * height * 3);
+        }
         cudaMemset(d_normalbuf, 0, (size_t)width * height * 3 * sizeof(float));
 
         // zbuffer stores ints (float-as-int). nearest is the MAXIMUM depth here,
@@ -1441,6 +1476,21 @@ public:
         dm.alive = false;
     }
 
+    bool setBackground(const unsigned char* px, int w, int h, int bpp) {
+        if (!initialized) return false;
+        clearBackground();
+        has_bg = uploadTexture(px, w, h, bpp, &d_bg_arr, &d_bg_tex);
+        return has_bg;
+    }
+
+    void clearBackground() {
+        if (d_bg_tex) cudaDestroyTextureObject(d_bg_tex);
+        if (d_bg_arr) cudaFreeArray(d_bg_arr);
+        d_bg_tex = 0;
+        d_bg_arr = NULL;
+        has_bg = false;
+    }
+
     void setMeshTexture(int h, int slot, const unsigned char* px,
                         int w, int hgt, int bpp) {
         if (h < 0 || h >= (int)meshes().size() || slot < 0 || slot > 2) return;
@@ -1600,6 +1650,13 @@ extern "C" {
                             int w, int h, int bpp) {
         if (g_cuda_rasterizer)
             g_cuda_rasterizer->setMeshTexture(handle, slot, px, w, h, bpp);
+    }
+    // background image, composited under every frame by cudaClearBuffers
+    void cudaSetBackground(const unsigned char* px, int w, int h, int bpp) {
+        if (g_cuda_rasterizer) g_cuda_rasterizer->setBackground(px, w, h, bpp);
+    }
+    void cudaClearBackground() {
+        if (g_cuda_rasterizer) g_cuda_rasterizer->clearBackground();
     }
     void cudaDestroyMesh(int handle) {
         if (g_cuda_rasterizer) g_cuda_rasterizer->destroyMesh(handle);

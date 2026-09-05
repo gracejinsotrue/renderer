@@ -7,6 +7,7 @@ window, no SDL, no interaction. Each one asserts and exits non-zero on failure.
     make test_engine    # end-to-end Engine test (needs SDL2 + the scene graph)
     make test_ssao      # ambient occlusion, same requirements
     make test_ssaa      # supersampling, same requirements
+    make test_background # background compositing, same requirements
 
 Run them from `src/` so the relative model paths resolve.
 
@@ -26,6 +27,7 @@ independent implementation to disagree with.
 | `test_engine` | does the real `Engine` render correctly on the CUDA path: scene graph, node transforms, two-pass shadows, light controls? |
 | `test_ssao` | does ambient occlusion darken cavities without touching exposed surfaces, the background, or the geometry? |
 | `test_ssaa` | does supersampling anti-alias the silhouette without moving, rescaling or blurring the image? |
+| `test_background` | does the background composite on the GPU, under the geometry, the right way up? |
 
 `test_engine` runs headless via SDL's dummy video driver and steps `render()`
 directly instead of calling `run()`. It is the only test that covers the
@@ -36,6 +38,10 @@ just checking that the frame changed. "SSAO changed something" is nearly
 free to satisfy and would pass on a pass that merely dimmed the image; the
 ratio between the two landmarks is what actually separates occlusion from a
 brightness slider.
+
+`test_background` uses a two-band image rather than a flat colour. A flat
+background cannot tell a correct composite from a vertically flipped one,
+which is the mistake the first version of the kernel actually made.
 
 `test_ssaa` checks two things that have to hold together. Anti-aliasing
 shows up as partial coverage at the silhouette, so it counts edge pixels

@@ -10,6 +10,7 @@
 Engine::Engine(int winWidth, int winHeight, int renWidth, int renHeight)
     : window(nullptr), sdlRenderer(nullptr), frameTexture(nullptr),
       captureStaging(renWidth, renHeight, TGAImage::RGB),
+      uploadedBackgroundVersion(-1),
       running(false), showStats(true), ssaaFactor(2),
       ssaoEnabled(true), ssaoRadius(0.18f), ssaoIntensity(0.85f), ssaoDebug(0),
       windowWidth(winWidth), windowHeight(winHeight), renderWidth(renWidth), renderHeight(renHeight),
@@ -828,6 +829,8 @@ void Engine::renderScene()
     std::vector<SceneNode *> visibleMeshes;
     scene.getVisibleMeshNodes(visibleMeshes);
 
+    syncBackground();
+
     // before the early return: present() blits whatever is in device memory,
     // so an empty scene has to clear it or the last drawn frame persists.
     cudaClearBuffers();
@@ -1109,6 +1112,24 @@ void Engine::shutdown()
 
 // uploads a model's geometry to the device the first time it is drawn, then
 // hands back the same handle every frame after that.
+// The background is a texture on the device, so it only needs re-uploading
+// when it actually changes. clear() composites it; nothing here draws.
+void Engine::syncBackground()
+{
+    if ((long)scene.backgroundVersion == uploadedBackgroundVersion)
+        return;
+
+    if (scene.background && scene.background->buffer())
+        cudaSetBackground(scene.background->buffer(),
+                          scene.background->get_width(),
+                          scene.background->get_height(),
+                          scene.background->get_bytespp());
+    else
+        cudaClearBackground();
+
+    uploadedBackgroundVersion = (long)scene.backgroundVersion;
+}
+
 int Engine::getCudaMesh(Model *model)
 {
     if (!model || !cuda_available)
@@ -1181,6 +1202,8 @@ void Engine::setSSAA(int factor)
         return;
 
     ssaaFactor = factor;
+    // the new rasterizer owns none of the old one's textures
+    uploadedBackgroundVersion = -1;
     if (!initCudaRasterizerSS(renderWidth, renderHeight, ssaaFactor))
     {
         std::cout << "SSAA " << ssaaFactor << "x failed to allocate, falling back to 1x"

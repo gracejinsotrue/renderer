@@ -35,6 +35,9 @@ extern "C"
     void cudaSetMeshTexture(int handle, int slot, const unsigned char *px,
                             int w, int h, int bpp);
     void cudaSetLinearTextureFiltering(int enabled);
+    // composited under every frame by cudaClearBuffers, at render resolution
+    void cudaSetBackground(const unsigned char *px, int w, int h, int bpp);
+    void cudaClearBackground();
     // screen space ambient occlusion over the finished device frame
     void cudaApplySSAO(const float *inv_vp16, const float *vp16,
                        float radius, float intensity, float bias, int debug);
@@ -69,6 +72,11 @@ private:
     // uploaded once and only re-transformed on the GPU each frame.
     std::unordered_map<Model *, int> cudaMeshes;
     int getCudaMesh(Model *model);
+
+    // Scene::backgroundVersion as of the last upload. -1 forces one, which is
+    // how a rasterizer resize gets its textures back.
+    long uploadedBackgroundVersion;
+    void syncBackground();
 
     // Input state
     bool keys[SDL_NUM_SCANCODES];
