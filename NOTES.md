@@ -71,7 +71,7 @@ linked but never built by it.
 
 ## What the GPU path does now
 
-Twelve kernels in `src/cuda/`, one file per pipeline stage. Geometry is
+Sixteen kernels in `src/cuda/`, one file per pipeline stage. Geometry is
 uploaded once per `Model` and lives on the device; only the matrices change per
 frame. The finished frame is written top-down in R,G,B so it can go straight
 into an SDL texture with no host per-pixel work.
@@ -80,7 +80,9 @@ into an SDL texture with no host per-pixel work.
 |---|---|---|
 | `mesh_setup_kernel` | `setup.cu` | transforms every queued mesh, backface + 5-plane frustum cull, appends survivors |
 | `count_kernel` / `scatter_kernel` | `binning.cu` | bins triangles into 16x16 tiles via a cub exclusive scan |
-| `tiled_raster_kernel` | `raster.cu` | one block per tile, one thread per pixel, full shading and shadow lookup |
+| `tiled_raster_kernel` | `raster.cu` | forward path: one block per tile, one thread per pixel, shades inside the depth loop |
+| `visibility_raster_kernel` | `raster.cu` | deferred path, front half: same walk, records the winning triangle instead of shading |
+| `deferred_shade_kernel` | `shade.cu` | deferred path, back half: one shade per covered pixel |
 | `shadow_raster_kernel` | `raster.cu` | depth-only, shares the same bins |
 | `zbuffer_fill_kernel` | `raster.cu` | depth clear |
 | `ssao_kernel` + blur + apply | `ssao.cu` | hemisphere occlusion over the finished frame |
@@ -95,7 +97,10 @@ triangle and material layouts both sides read. cub is pulled in by `binning.cu`
 alone.
 
 `ssao_debug`, which renders the occlusion term, normals or depth on their own,
-is the twelfth.
+plus `visbuffer_fill_kernel` and the presentation copy in `present.cu`, make up
+the rest. Deferred is the default; `cudaSetDeferredShading` switches paths at
+run time so the two can be compared inside one process, and both call the same
+`shade_fragment` in `shading.cuh`.
 
 ## Measurements
 
@@ -320,6 +325,62 @@ which is the earlier `cudaGLGetDevices` finding reproduced from inside the
 engine, and it drops to the host-copy path rather than failing. The headless
 tests never get a GL context at all and fall back further, to the original
 `SDL_Renderer`; all ten still pass.
+
+### Deferred shading, and how much the answer depends on the scene
+
+`tests/bench_overdraw` stacks one mesh N deep along the view axis so the
+copies overlap on screen, and reports both paths at each depth. It counts
+fragment-shader invocations as well as timing them, because the timing is not
+self-validating: if both paths shade the same number of times then the scene
+has no overdraw and the clock is answering a question nobody asked.
+
+800x800, `obj/african_head.obj`, 2,492 fairly large triangles:
+
+| layers | fwd shades | def shades | fwd colour | def colour | ratio |
+|---|---|---|---|---|---|
+| 1 | 180,241 | 176,553 | 0.163 ms | 0.134 ms | 1.21x |
+| 2 | 273,001 | 178,785 | 0.277 ms | 0.208 ms | 1.33x |
+| 4 | 400,961 | 183,589 | 0.514 ms | 0.356 ms | 1.44x |
+| 8 | 603,381 | 194,156 | 0.896 ms | 0.577 ms | 1.55x |
+
+The mechanism does what it was built to do. Deferred's invocation count is
+essentially flat -- 176,553 to 194,156, a factor of 1.10 across an eightfold
+increase in depth complexity -- while forward's triples. The gap in time widens
+monotonically with depth, 1.21x to 1.55x, which is the shape the change was
+supposed to produce. Zero differing pixels at every depth, and deferred's
+invocation counts are identical run to run because one shade per covered pixel
+is deterministic, where forward's move around with the depth-test race.
+
+Neither timing curve is flat and neither can be. Both paths still walk every
+triangle in the tile to work out coverage, and that is what grows with the
+geometry; deferred removes only the repeated shading on top of it.
+
+**And on the first scene I tried, it bought almost nothing.** `rumi/hair.obj`,
+same sweep:
+
+| layers | fwd shades | def shades | fwd colour | def colour | ratio |
+|---|---|---|---|---|---|
+| 1 | 1,830 | 1,297 | 1.147 ms | 0.990 ms | 1.16x |
+| 8 | 9,547 | 1,593 | 7.594 ms | 7.220 ms | 1.05x |
+
+The invocation ratio is even better there -- 6x rather than 3x -- and the time
+barely moves. The counter is what explains it: 1,297 shaded pixels out of
+640,000. 41,963 faces drawing roughly 1,300 pixels is sub-pixel geometry, so
+the colour stage is almost entirely coverage testing and the shading it removes
+was never the cost.
+
+That is the useful part of the result. Deferred shading pays in proportion to
+how much of the frame is *shading* rather than *coverage*: large triangles and
+expensive fragment work, yes; dense micro-triangle meshes, hardly at all. Had I
+measured only `hair.obj` -- the obvious choice, since it is the model with the
+most geometry -- the conclusion would have been that the visibility buffer does
+not work, and it would have been wrong. Had I measured only `african_head.obj`
+I would have overclaimed. The invocation counter is what made the difference
+legible rather than a mystery, and it cost about ten lines.
+
+Worth keeping in mind for Tier 2: it also means the case for deferred gets
+stronger as the shader gets more expensive, so PBR and multiple lights should
+widen these ratios rather than leave them where they are.
 
 ## Limits that are the environment, not the code
 

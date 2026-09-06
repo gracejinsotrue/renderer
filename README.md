@@ -19,6 +19,11 @@ Prompt so nvcc finds `cl.exe`, and get SDL2 from `vcpkg install sdl2:x64-windows
 
 - Tiled rasterization: one kernel transforms and culls the scene, triangles are
   binned into 16x16 tiles, one block per tile rasterizes them.
+- Deferred shading through a visibility buffer: the raster pass records which
+  triangle won each pixel (depth and triangle index in one 64-bit atomic) and a
+  second pass shades once per pixel instead of once per surviving fragment.
+  Forward shading is still there and switchable, because that is what the
+  deferred path is measured against.
 - Scene graph with parent-child transforms.
 - Two-pass shadow mapping, Phong shading with diffuse/normal/specular maps.
 - SSAO.
