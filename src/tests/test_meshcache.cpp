@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include "Engine.h"
+#include "compat.h"
 
 static int failures = 0;
 

@@ -3,6 +3,8 @@
 *.exe
 *.obj
 *.txt
+# ...but the native build description is a .txt and has to be tracked.
+!CMakeLists.txt
 *.dll
 *.mtl
 *.jpg
@@ -27,3 +29,8 @@ src/tests/bench_tile.cpp
 src/tests/profile_frame.cpp
 src/tests/render_png.cpp
 src/tests/test_wind.cpp
+
+# CMake native build trees (the WSL Makefile builds in-tree; CMake does not)
+build/
+build-*/
+CMakeUserPresets.json

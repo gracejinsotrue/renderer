@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <algorithm>
 #include "Engine.h"
+#include "compat.h"
 
 static int failures = 0;
 

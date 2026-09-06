@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include "Engine.h"
+#include "compat.h"
 
 // the pre-port Engine.h pulls in shaders.h, which declares these extern
 Model *model = NULL;

@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <chrono>
 #include "Engine.h"
+#include "compat.h"
 using Clock = std::chrono::high_resolution_clock;
 
 int main(int argc, char **argv)
