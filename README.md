@@ -1,7 +1,13 @@
 A 3D rendering engine written from scratch, where the whole graphics pipeline is
-my own code running as CUDA kernels on the GPU. SDL2 opens a window and nothing
-else is borrowed: no OpenGL, no DirectX, no Vulkan, and no CPU fallback. Without
-a GPU the engine refuses to start.
+my own code running as CUDA kernels on the GPU. Nothing rasterizes but my own
+kernels: no OpenGL, DirectX or Vulkan draws a triangle here, and there is no CPU
+fallback. Without a GPU the engine refuses to start.
+
+The one thing borrowed is a way to get the finished frame onto the screen. SDL2
+opens the window, and OpenGL owns exactly one textured quad that the completed
+frame is shown on -- so that the frame can be handed over on the device instead
+of being copied out to the host and back. Every pixel on that quad was computed
+by a CUDA kernel in this repo.
 
 800x800, including getting the finished frame back to the screen, on a laptop
 RTX A3000:
@@ -12,10 +18,11 @@ RTX A3000:
 | `rumi/hair.obj` | 41,963 | ~3.3 | ~300 |
 | `rumi/body.obj` | 136,725 | ~3.8 | ~260 |
 
-40% or more of each of those frames is the readback, which is capped near
-1.8 GB/s by WSL2's GPU paravirtualization layer rather than by anything in the
-code. That measurement and the rest of the port are written up in
-[NOTES.md](NOTES.md).
+Those are WSL numbers, where a large share of each frame is the readback. On a
+native build the readback is gone entirely: the frame is handed to OpenGL on the
+device. Both the port and the measurements that corrected my assumptions about it
+-- including going native turning out *not* to make the frame faster, which is
+not what I expected -- are written up in [NOTES.md](NOTES.md).
 
 I started this in 2025 as a CPU rasterizer following ssloy's
 [tinyrenderer](https://schmittl.github.io/tinyrenderer/), to teach myself
@@ -79,7 +86,8 @@ could silently drop geometry (an earlier fixed-cap version was dropping 22,702
 triangles a frame without saying so). The raster kernel runs one block per tile
 and one thread per pixel, so a thread only ever walks the triangles touching its
 own tile. The frame never comes back to the CPU to be composited: it is written
-top-down in R,G,B and DMA'd straight into the SDL texture.
+top-down in R,G,B, which is exactly the layout the present path (7) hands to
+OpenGL, so no pixel is ever rearranged on the host.
 
 2) **Scene graph hierarchy**, the generic
 [kind](https://en.wikipedia.org/wiki/Scene_graph): parent-child transforms, so
@@ -103,11 +111,23 @@ device, so edges, textures and specular highlights all get anti-aliased.
 6) **A differential test suite.** The CPU rasterizer this started as now lives in
 `src/tests/` and is not linked into the engine at all; its remaining job is to be
 an independent implementation the kernels can be checked against. The two agree
-to a mean byte difference of 0.17 with identical pixel coverage. See
+to a mean byte difference of 0.0614, and agree to the byte across both the MSVC
+and gcc builds. See
 [src/tests/README.md](src/tests/README.md), which is mostly a list of the ways
 each test can be written so that it passes without proving anything.
 
-7) **Profiling.** nsys cannot get a GPU timeline through WSL2, so the kernels
+7) **The finished frame never leaves the GPU.** On a native build the frame is
+copied device-to-device into an OpenGL pixel buffer registered with CUDA, and
+the texture is fed from that buffer, so presenting costs no host round trip.
+The older path -- device to host, then uploaded again -- is still there and
+switchable at runtime with `K`, because that is the only way to measure the
+two against each other honestly: both end at the same texture, quad and swap,
+so nothing but the transfer differs. `unified_engine --bench-present`
+alternates them in interleaved blocks and reports the difference, which is
+about 1.0-1.2 ms a frame at 800x800. Under WSL, where OpenGL is llvmpipe and
+CUDA can share no device with it, the engine says so and falls back.
+
+8) **Profiling.** nsys cannot get a GPU timeline through WSL2, so the kernels
 time themselves with CUDA events and `tests/bin/profile_frame` prints the
 per-stage breakdown. There is also an easy Nsight wrapper script,
 [nsys_easy](src/nsys_easy), for host-side API timings.

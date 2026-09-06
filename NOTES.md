@@ -211,6 +211,58 @@ measurement. What does survive:
   copy rather than making it faster -- which is the only version of this
   argument the measurement still supports
 
+### Interop, which is the version of that argument that held
+
+`src/cuda/present.cu` registers an OpenGL pixel buffer with CUDA, and the
+finished frame is copied into it device-to-device instead of being dragged
+into host memory and uploaded again. `GLPresenter` owns the context, the
+texture and the quad.
+
+Both present paths were built to end identically -- same texture, same quad,
+same context, same swap -- so the only difference is how pixels reach the
+texture. That mattered: the obvious version of this comparison would have been
+interop against the old `SDL_Renderer` path, which also differs in the driver
+path, the texture format and the swap, and would have credited interop for all
+three.
+
+`unified_engine --bench-present` alternates the two in interleaved blocks of
+120 frames. 800x800, 2x SSAA, 357 frames per mode per run:
+
+| run | interop | host copy | difference |
+|---|---|---|---|
+| 1 | 1.114 ms | 2.245 ms | 1.131 ms |
+| 2 | 1.188 ms | 2.355 ms | 1.167 ms |
+| 3 | 1.949 ms | 2.983 ms | 1.034 ms |
+| 4 | 2.209 ms | 3.184 ms | 0.975 ms |
+
+Interop is faster in every run, by about 1.0-1.2 ms a frame.
+
+The interleaving is why those numbers are usable at all. Look down the first
+column: interop alone drifts from 1.11 ms to 2.21 ms across runs, so a
+sequential "measure A, then measure B" would have produced anything from a
+large win to a large loss depending on when each half happened to run. The
+paired difference within a run is stable to about 0.2 ms while the absolute
+numbers move by 100%. On this machine only the paired difference means
+anything.
+
+Two honest limits on the figure. The timer wraps the whole upload, and both
+paths begin by flushing the pipeline and resolving supersampling, so each
+absolute number includes waiting for the frame to finish rendering -- it is
+not a pure transfer cost. Both pay that identically, which is what keeps the
+difference clean. And this is one machine and one scene.
+
+The fallback is real rather than theoretical, and WSL is what proves it. The
+same binary logic there reports:
+
+    GL renderer: llvmpipe (LLVM 20.1.2, 256 bits)
+    CUDA/GL interop unavailable (OS call failed or operation not
+    supported on this OS, 0 devices); presenting via host copy
+
+which is the earlier `cudaGLGetDevices` finding reproduced from inside the
+engine, and it drops to the host-copy path rather than failing. The headless
+tests never get a GL context at all and fall back further, to the original
+`SDL_Renderer`; all ten still pass.
+
 ## Limits that are the environment, not the code
 
 Two things worth knowing before trying to optimize the frame further here.
@@ -356,10 +408,15 @@ rasterizer will not start rather than falling back.
 
 ## Still open
 
-- The frame DMA is on the critical path. It cannot be made faster here (see
-  above), but it could be overlapped with the next frame's kernels, which would
-  take a 3.35 ms frame to roughly 1.9 ms at the cost of one frame of latency.
-  The loop is uncapped at ~275 FPS, so this buys throughput that is not short.
+- The frame DMA is off the critical path natively, where interop keeps the
+  frame on the device. It is still there under WSL and in the headless
+  fallback, and overlapping it with the next frame's kernels would still help
+  those, at the cost of one frame of latency. Lower priority than it was: the
+  path that motivated it is no longer the default one.
+- `--bench-present` measures the upload with a host timer that also covers the
+  pipeline flush. Isolating the transfer itself would want CUDA events around
+  the copy alone, which would also make the interop number comparable to the
+  bandwidth table above rather than only to its own control.
 - `meshes()` is a function-local static that outlives the rasterizer. That is
   what lets uploaded geometry survive a supersampling change, but it is
   load-bearing by accident rather than by design.
