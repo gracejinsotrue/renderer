@@ -12,6 +12,7 @@ unified_engine
 *.a
 __pycache__/
 
+# private scratch log. the curated version is NOTES.md, which is tracked.
 memory.md
 
 # compiled test binaries
