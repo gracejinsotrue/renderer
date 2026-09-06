@@ -211,6 +211,64 @@ measurement. What does survive:
   copy rather than making it faster -- which is the only version of this
   argument the measurement still supports
 
+### Profiling natively, which is the other thing the port was for
+
+`src/profile.ps1` wraps Nsight Systems and, optionally, Nsight Compute.
+
+Under WSL2, nsys traced the CUDA API fine and the capture contained no GPU
+kernel rows at all, which is why every kernel in `src/cuda/` times itself with
+CUDA events. Natively the timeline is there. `profile_frame`, one run:
+
+| kernel | instances | avg | max |
+|---|---|---|---|
+| `tiled_raster_kernel` | 103 | 686 us | 1.41 ms |
+| `mesh_setup_kernel` | 103 | 46 us | 133 us |
+| `scatter_kernel` | 103 | 11 us | 15 us |
+| `zbuffer_fill_kernel` | 103 | 9.2 us | 9.9 us |
+| `count_kernel` | 103 | 7.0 us | 15 us |
+| cub `DeviceScanKernel` | 103 | 4.0 us | 4.4 us |
+
+The instance count is the first thing to check and it comes out exactly right:
+`profile_frame` runs `reps+1` for three models, 51 + 31 + 21 = 103. The
+`tiled_raster_kernel` max of 1.41 ms is `rumi/body.obj`, against the 1.35-1.39
+ms the CUDA events report for the same model. The events were telling the
+truth, which is worth knowing now that a second instrument can say so.
+
+The capture also names the kernels `cub::CUB_200802_SM_860::...`, an
+independent confirmation that the sm_86 architecture fix took -- the build was
+silently producing sm_52 for a while and nothing but the configure summary
+would have said otherwise.
+
+**What the memory rows exposed.** The one thing the CUDA events could not see:
+
+| operation | count | total | max |
+|---|---|---|---|
+| memcpy Device-to-Host | 415 | 16.08 ms | 156 us |
+| memset | 827 | 4.64 ms | 25 us |
+| memcpy Host-to-Device | 219 | 1.71 ms | 685 us |
+
+103 of those 415 D2H copies are the frame, at ~156 us each, and they account
+for 99.9% of the D2H time. That is 1.92 MB in 156 us, or 12.3 GB/s.
+
+The other 312 are three per flush -- `num_tris`, `last_off`, `last_cnt` --
+and 103 flushes times three is 309, which is the count. Each moves a handful
+of bytes and each is a *blocking* readback that stalls the CPU on the GPU
+mid-frame. They cost almost nothing in bandwidth, and they are the best
+suspect for what the derived "frame DMA back" figure has been attributing to
+the bus all along: 0.41-0.89 ms measured against 0.156 ms of actual transfer.
+Removing them is now a concrete optimization rather than a hunch, and it is
+exactly the sort of thing the hand-rolled event timing could not have found,
+because it only ever wrapped the kernels.
+
+**Nsight Compute still cannot read counters here.** `RmProfilingAdminOnly`
+under `HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak` is already `0`, and has been across a reboot, and `ncu` still
+returns `ERR_NVGPUCTRPERM` on driver 596.08. That is the only such key
+anywhere under `nvlddmkm`. Running `ncu` from an elevated shell is the
+remaining lever; `profile.ps1` detects the error and says so rather than
+printing an empty report. nsys needs no elevation and is unaffected, and nsys
+is the tool that matters for pipeline work -- ncu is for occupancy and
+memory-throughput counters on one kernel, which is a Tier 1 concern.
+
 ### Interop, which is the version of that argument that held
 
 `src/cuda/present.cu` registers an OpenGL pixel buffer with CUDA, and the
@@ -294,13 +352,23 @@ staging through pinned memory is worse (1.376 ms). This is WSL2's GPU
 paravirtualization boundary; the same transfer on native hardware would be
 roughly an order of magnitude faster.
 
-**That last sentence was a guess and it was wrong.** It was never measured --
-there was no native build to measure it against at the time -- and when one
-existed the native readback came out *slower* than the WSL one, not an order
-of magnitude faster. See "Going native did not make the frame faster" above.
-The bandwidth table itself still stands; only the extrapolation off the end of
-it was wrong. Worth leaving both here: the table is a measurement and the
-sentence after it was an assumption wearing a measurement's clothes. The ~1.6 ms frame DMA that shows up as
+**That sentence turned out to be right, and it still did not mean what it was
+being used to mean.** A native nsys capture puts the frame readback at 156 us
+for 1.92 MB: 12.3 GB/s, against 1.46 GB/s for the 1.83 MB row above. 8.4x, so
+"roughly an order of magnitude faster" was a fair call.
+
+What does not follow is the conclusion that was drawn from it. The frame did
+not get faster (see "Going native did not make the frame faster" above),
+because the figure labelled "frame DMA back" in `profile_frame` was never
+mostly DMA. It is derived -- wall time minus the CUDA event times -- and at
+0.41-0.89 ms it is three to five times the 0.156 ms the transfer actually
+takes. The rest is synchronization, which does not care how fast the bus is.
+
+Two claims were riding on one measurement and only one of them was ever
+checked: the bandwidth claim was sound, and the frame-time claim rested on a
+number that was quietly attributing synchronization to the bus. An earlier
+draft of these notes said flatly that the prediction had been wrong, which was
+an overcorrection written before there was a profiler to settle it. The ~1.6 ms frame DMA that shows up as
 ~45% of a light frame is this, not a code defect.
 
 Profiling note: nsys cannot get a GPU timeline through WSL2 either. It traces
@@ -413,6 +481,12 @@ rasterizer will not start rather than falling back.
   fallback, and overlapping it with the next frame's kernels would still help
   those, at the cost of one frame of latency. Lower priority than it was: the
   path that motivated it is no longer the default one.
+- `flush()` does three blocking few-byte device-to-host reads per frame
+  (`num_tris`, `last_off`, `last_cnt`), each of which stalls the CPU on the GPU
+  mid-frame. nsys counts 309 of them across a 103-frame run. They are nearly
+  free in bandwidth and are the best current suspect for the gap between the
+  0.156 ms the frame transfer actually takes and the 0.41-0.89 ms attributed to
+  it. Keeping those counts on the device would remove all three.
 - `--bench-present` measures the upload with a host timer that also covers the
   pipeline flush. Isolating the transfer itself would want CUDA events around
   the copy alone, which would also make the interop number comparable to the

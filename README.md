@@ -127,10 +127,17 @@ alternates them in interleaved blocks and reports the difference, which is
 about 1.0-1.2 ms a frame at 800x800. Under WSL, where OpenGL is llvmpipe and
 CUDA can share no device with it, the engine says so and falls back.
 
-8) **Profiling.** nsys cannot get a GPU timeline through WSL2, so the kernels
-time themselves with CUDA events and `tests/bin/profile_frame` prints the
-per-stage breakdown. There is also an easy Nsight wrapper script,
-[nsys_easy](src/nsys_easy), for host-side API timings.
+8) **Profiling, with two instruments that check each other.** nsys cannot get a
+GPU timeline through WSL2, so every kernel times itself with CUDA events and
+`tests/bin/profile_frame` prints the per-stage breakdown. On a native build
+[src/profile.ps1](src/profile.ps1) gets a real Nsight Systems timeline, and the
+two agree: the raster kernel's self-reported 1.35-1.39 ms against a measured
+1.41 ms max, over exactly the 103 launches the tool should have made. Having
+the second instrument is what turned up the thing the first one structurally
+could not see -- the frame readback takes 0.156 ms, not the 0.41-0.89 ms the
+CUDA-event arithmetic was attributing to it, because `flush()` also does three
+blocking few-byte readbacks a frame and those are stalls rather than transfers.
+[nsys_easy](src/nsys_easy) is still there for host-side API timings under WSL.
 
 
 # IMAGES
