@@ -138,6 +138,7 @@ add_library(render_core STATIC
   src/cuda/setup.cu
   src/cuda/binning.cu
   src/cuda/raster.cu
+  src/cuda/shade.cu
   src/cuda/ssao.cu
   src/cuda/resolve.cu
   src/cuda/rasterizer.cu
@@ -209,7 +210,7 @@ if(BUILD_TESTING_RENDERER)
   # Local benchmarking and inspection tools. These are gitignored, so build
   # whichever happen to be present rather than failing on the ones that are not.
   set(OPTIONAL_TOOLS test_wind bench bench_cull bench_tile profile_frame
-                     render_png bench_meshes capture_scene)
+                     render_png bench_meshes capture_scene bench_overdraw)
 
   foreach(_t IN LISTS CORE_TESTS)
     add_executable(${_t} src/tests/${_t}.cpp ${REFERENCE_RASTER})

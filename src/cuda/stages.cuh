@@ -29,11 +29,31 @@ void cudaLaunchTiledRaster(const CudaTriangle* triangles, const int* tile_counts
                            const CudaMaterial* materials,
                            unsigned char* framebuffer, int* zbuffer,
                            const int* shadowbuf, float* normalbuf,
-                           int width, int height, int tiles_x, int tiles_y);
+                           int width, int height, int tiles_x, int tiles_y,
+                           int* stats);
 void cudaLaunchShadowRaster(const CudaTriangle* triangles, const int* tile_counts,
                             const int* tile_offsets, const int* tri_indices,
                             int* shadowbuf,
                             int width, int height, int tiles_x, int tiles_y);
+
+// raster.cu: the deferred front half. Same tile walk as the colour pass, but
+// it records the winning triangle per pixel instead of shading it. Depth and
+// the winner's identity move together in one 64-bit atomic.
+void cudaLaunchVisibilityRaster(const CudaTriangle* triangles,
+                                const int* tile_counts, const int* tile_offsets,
+                                const int* tri_indices,
+                                unsigned long long* visbuffer,
+                                int width, int height, int tiles_x, int tiles_y);
+void cudaLaunchVisbufferFill(unsigned long long* visbuffer, int count);
+
+// shade.cu: the deferred back half. One thread per pixel, one shade per pixel,
+// so cost follows screen area rather than depth complexity.
+void cudaLaunchDeferredShade(const CudaTriangle* triangles,
+                             const CudaMaterial* materials,
+                             const unsigned long long* visbuffer,
+                             unsigned char* framebuffer, int* zbuffer,
+                             const int* shadowbuf, float* normalbuf,
+                             int width, int height, int* stats);
 
 // ssao.cu: occlude the finished frame in place. ao and ao_blur are scratch.
 void cudaLaunchSSAO(const int* zbuffer, const float* normalbuf,

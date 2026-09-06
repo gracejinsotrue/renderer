@@ -18,6 +18,12 @@ typedef vec<4, float> Vec4f;
 
 static bool g_use_linear_filter = true;
 
+// Which of the two colour paths runs. Deferred shades once per pixel; forward
+// shades inside the depth loop and so pays per fragment that ever won. Kept
+// switchable at run time so the two can be compared inside one process, the
+// same reason the present paths are.
+static bool g_deferred_shading = true;
+
 // geometry that lives on the device across frames
 struct DeviceMesh {
     float* d_verts;
@@ -80,12 +86,17 @@ private:
     size_t scan_temp_bytes;
     int    stat_bin_entries;  // total (triangle, tile) pairs last flush
     int*   d_tri_count;       // triangles appended by mesh_setup_kernel
-    int*   d_stats;           // [culled_back, culled_off, dropped, submitted]
+    int*   d_stats;           // [culled_back, culled_off, dropped, submitted,
+                          //  shade_invocations]
     CudaMaterial* d_materials;   // one slot per mesh drawn this frame
     size_t mat_capacity;         // slots currently allocated in d_materials
     MeshDraw* d_draws;           // the frame's queued meshes
     size_t draw_capacity;
     int*   d_shadowbuf;          // depth from the light's point of view
+    // Deferred path: one 64-bit word per pixel, depth in the high half and the
+    // winning triangle index in the low half. Only allocated once; the forward
+    // path simply never reads it.
+    unsigned long long* d_visbuffer;
 
     // SSAO. normals are bottom-up like the zbuffer; ao/ao_blur are one float
     // per pixel. d_ssao_kernel holds the fixed hemisphere sample set.
@@ -183,11 +194,13 @@ public:
 
         cudaMalloc(&d_tri_count, sizeof(int));
         cudaMemset(d_tri_count, 0, sizeof(int));
-        cudaMalloc(&d_stats, 4 * sizeof(int));
-        cudaMemset(d_stats, 0, 4 * sizeof(int));
+        cudaMalloc(&d_stats, 8 * sizeof(int));
+        cudaMemset(d_stats, 0, 8 * sizeof(int));
         mat_capacity = MATERIALS_INITIAL;
         cudaMalloc(&d_materials, mat_capacity * sizeof(CudaMaterial));
         cudaMalloc(&d_shadowbuf, (size_t)w * h * sizeof(int));
+
+        cudaMalloc(&d_visbuffer, (size_t)w * h * sizeof(unsigned long long));
 
         cudaMalloc(&d_normalbuf, (size_t)w * h * 3 * sizeof(float));
         cudaMalloc(&d_ao,        (size_t)w * h * sizeof(float));
@@ -244,6 +257,7 @@ public:
             cudaFree(d_materials);
             if (d_draws) cudaFree(d_draws);
             cudaFree(d_shadowbuf);
+            cudaFree(d_visbuffer);
             cudaFree(d_normalbuf);
             cudaFree(d_ao);
             cudaFree(d_ao_blur);
@@ -333,12 +347,16 @@ public:
 
         cudaLaunchZbufferFill(d_zbuffer, far_val.i, width * height);
 
+        // Deferred: 0 means "no triangle covers this pixel", which is why the
+        // packed index is stored biased by one.
+        cudaLaunchVisbufferFill(d_visbuffer, width * height);
+
         h_batch.clear();
         h_draws.clear();
         h_draw_faces = 0;
         stat_submitted = stat_culled_back = stat_culled_offscreen = 0;
         cudaMemset(d_tri_count, 0, sizeof(int));
-        cudaMemset(d_stats, 0, 4 * sizeof(int));
+        cudaMemset(d_stats, 0, 8 * sizeof(int));
         // zero the table so slot 0 is a valid neutral material: the host
         // staging path points every triangle at it, and reading an
         // uninitialized cudaTextureObject_t would fault.
@@ -560,11 +578,21 @@ public:
             cudaLaunchShadowRaster(d_triangles, d_tile_counts, d_tile_offsets,
                                    d_tri_indices, d_shadowbuf,
                                    width, height, tiles_x, tiles_y);
+        } else if (g_deferred_shading) {
+            // Front half: decide who is visible, shade nothing.
+            cudaLaunchVisibilityRaster(d_triangles, d_tile_counts,
+                                       d_tile_offsets, d_tri_indices,
+                                       d_visbuffer,
+                                       width, height, tiles_x, tiles_y);
+            // Back half: one shade per covered pixel, whatever the overdraw was.
+            cudaLaunchDeferredShade(d_triangles, d_materials, d_visbuffer,
+                                    d_framebuffer, d_zbuffer, d_shadowbuf,
+                                    d_normalbuf, width, height, d_stats);
         } else {
             cudaLaunchTiledRaster(d_triangles, d_tile_counts, d_tile_offsets,
                                   d_tri_indices, d_materials, d_framebuffer,
                                   d_zbuffer, d_shadowbuf, d_normalbuf,
-                                  width, height, tiles_x, tiles_y);
+                                  width, height, tiles_x, tiles_y, d_stats);
         }
 
         cudaEventRecord(ev_raster);
@@ -797,6 +825,13 @@ public:
         h_draw_faces += dm.nfaces;
     }
 
+    int shadeCount() {
+        if (!initialized) return 0;
+        int n = 0;
+        cudaMemcpy(&n, d_stats + 4, sizeof(int), cudaMemcpyDeviceToHost);
+        return n;
+    }
+
     void synchronize() {
         if (initialized) {
             flush();
@@ -837,6 +872,23 @@ extern "C" {
 
     void cudaSetLinearTextureFiltering(int enabled) {
         g_use_linear_filter = enabled != 0;
+    }
+
+    // 1 = visibility buffer then one shade per pixel, 0 = shade inside the
+    // depth loop. Takes effect on the next flush; nothing is reallocated.
+    void cudaSetDeferredShading(int enabled) {
+        g_deferred_shading = enabled != 0;
+    }
+
+    int cudaGetDeferredShading() {
+        return g_deferred_shading ? 1 : 0;
+    }
+
+    // Fragment-shader invocations since the last clear. Forward counts one per
+    // fragment that won the depth test; deferred one per covered pixel.
+    int cudaGetShadeCount() {
+        if (!g_cuda_rasterizer) return 0;
+        return g_cuda_rasterizer->shadeCount();
     }
 
     void cudaClearBuffers() {
