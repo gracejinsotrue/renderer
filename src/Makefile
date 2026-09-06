@@ -6,13 +6,20 @@ NVCC = /usr/local/cuda/bin/nvcc
 # CUDA 12.0's nvcc refuses host gcc > 12, and the default g++ here is 14,
 # so pin the host compiler. bump this if you upgrade the CUDA toolkit.
 NVCC_CCBIN = g++-11
-NVCCFLAGS = -std=c++17 -O2 -ccbin $(NVCC_CCBIN)
+NVCCFLAGS = -std=c++17 -O2 -ccbin $(NVCC_CCBIN) -I.
 INCLUDES = -I/usr/include/SDL2
 LIBS = -lSDL2 -lSDL2main -lm
 
 # source files
 SOURCES = main.cpp Engine.cpp model.cpp transform.cpp tgaimage.cpp geometry.cpp Scene.cpp SceneNode.cpp
 OBJECTS = $(SOURCES:.cpp=.o)
+
+# the GPU pipeline, one file per stage. rasterizer.cu owns the device
+# memory and sequences the rest; cuda/stages.cuh is the boundary.
+CUDA_SOURCES = cuda/setup.cu cuda/binning.cu cuda/raster.cu cuda/ssao.cu \
+               cuda/resolve.cu cuda/rasterizer.cu
+CUDA_OBJECTS = $(CUDA_SOURCES:.cu=.o)
+
 TARGET = unified_engine
 
 # generated header dependencies, one .d per .o
@@ -24,8 +31,8 @@ all: $(TARGET)
 -include $(DEPS)
 
 #link executable
-$(TARGET): $(OBJECTS) cuda_triangle.o
-	$(CXX) $(OBJECTS) cuda_triangle.o -o $(TARGET) $(LIBS) \
+$(TARGET): $(OBJECTS) $(CUDA_OBJECTS)
+	$(CXX) $(OBJECTS) $(CUDA_OBJECTS) -o $(TARGET) $(LIBS) \
 	  -L/usr/local/cuda/lib64 -lcudart
 
 # Compile source files
@@ -33,8 +40,8 @@ $(TARGET): $(OBJECTS) cuda_triangle.o
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
 
-cuda_triangle.o: cuda_triangle.cu geometry.h tgaimage.h
-	$(NVCC) $(NVCCFLAGS) -c cuda_triangle.cu -o cuda_triangle.o
+cuda/%.o: cuda/%.cu cuda/common.cuh cuda/stages.cuh geometry.h tgaimage.h
+	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 
 # Standalone GPU tests, see tests/README.md. Run from src/.
 # Regression tests: each asserts and exits non-zero on failure.
@@ -43,7 +50,7 @@ TESTS = test_cull test_blit test_mesh test_shaded test_frustum
 # Local benchmarking and inspection tools. Not part of the regression
 # suite and not tracked in git, so `tools` skips any that are absent.
 TOOLS = test_wind bench bench_cull bench_tile profile_frame render_png
-TESTOBJS = model.o tgaimage.o geometry.o transform.o cuda_triangle.o \
+TESTOBJS = model.o tgaimage.o geometry.o transform.o $(CUDA_OBJECTS) \
            Scene.o SceneNode.o
 # The CPU reference rasterizer the differential tests compare against. It is
 # test-only: compiled into the test binaries, never into the engine.
@@ -67,7 +74,7 @@ tools: $(TESTOBJS)
 
 # Headless end-to-end test of the real Engine (needs SDL2 + the scene graph).
 ENGOBJS = Engine.o Scene.o SceneNode.o model.o transform.o tgaimage.o \
-          geometry.o cuda_triangle.o
+          geometry.o $(CUDA_OBJECTS)
 
 test_ssao: $(ENGOBJS)
 	mkdir -p tests/bin
@@ -105,7 +112,7 @@ test_engine: $(ENGOBJS)
 
 # Clean build files
 clean:
-	rm -f $(OBJECTS) $(DEPS) cuda_triangle.o $(TARGET)
+	rm -f $(OBJECTS) $(DEPS) $(CUDA_OBJECTS) $(TARGET)
 	rm -rf tests/bin
 
 # install SDL2 (Ubuntu/Debian)

@@ -1,6 +1,7 @@
 // end-to-end test of the real Engine on the CUDA path.
 //
-// every other test in here drives cuda_triangle.cu directly. this one drives
+// every other test in here drives the kernels in src/cuda/ directly. this one
+// drives
 // Engine itself - the scene graph, node transforms, the two-pass shadow
 // render - because that is where the integration seams are, and none of the
 // standalone tests can see them.

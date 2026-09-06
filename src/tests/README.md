@@ -33,7 +33,8 @@ independent implementation to disagree with.
 
 `test_engine` runs headless via SDL's dummy video driver and steps `render()`
 directly instead of calling `run()`. It is the only test that covers the
-integration seams; everything else drives `cuda_triangle.cu` on its own.
+integration seams; everything else drives the kernels in `src/cuda/` on
+its own.
 
 `test_ssao` compares a concave landmark against a convex one rather than
 just checking that the frame changed. "SSAO changed something" is nearly

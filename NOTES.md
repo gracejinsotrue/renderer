@@ -41,20 +41,28 @@ linked but never built by it.
 
 ## What the GPU path does now
 
-Twelve kernels. Geometry is uploaded once per `Model` and lives on the device;
-only the matrices change per frame. The finished frame is written top-down in
-R,G,B so it can go straight into an SDL texture with no host per-pixel work.
+Twelve kernels in `src/cuda/`, one file per pipeline stage. Geometry is
+uploaded once per `Model` and lives on the device; only the matrices change per
+frame. The finished frame is written top-down in R,G,B so it can go straight
+into an SDL texture with no host per-pixel work.
 
-| kernel | job |
-|---|---|
-| `mesh_setup_kernel` | transforms every queued mesh, backface + 5-plane frustum cull, appends survivors |
-| `count_kernel` / `scatter_kernel` | bins triangles into 16x16 tiles via a cub exclusive scan |
-| `tiled_raster_kernel` | one block per tile, one thread per pixel, full shading and shadow lookup |
-| `shadow_raster_kernel` | depth-only, shares the same bins |
-| `ssao_kernel` + blur + apply | hemisphere occlusion over the finished frame |
-| `background_kernel` | composites the background image under the geometry |
-| `downsample_kernel` | supersample resolve |
-| `zbuffer_fill_kernel` | depth clear |
+| kernel | file | job |
+|---|---|---|
+| `mesh_setup_kernel` | `setup.cu` | transforms every queued mesh, backface + 5-plane frustum cull, appends survivors |
+| `count_kernel` / `scatter_kernel` | `binning.cu` | bins triangles into 16x16 tiles via a cub exclusive scan |
+| `tiled_raster_kernel` | `raster.cu` | one block per tile, one thread per pixel, full shading and shadow lookup |
+| `shadow_raster_kernel` | `raster.cu` | depth-only, shares the same bins |
+| `zbuffer_fill_kernel` | `raster.cu` | depth clear |
+| `ssao_kernel` + blur + apply | `ssao.cu` | hemisphere occlusion over the finished frame |
+| `background_kernel` | `resolve.cu` | composites the background image under the geometry |
+| `downsample_kernel` | `resolve.cu` | supersample resolve |
+
+`rasterizer.cu` owns every device allocation and sequences those stages. It
+launches no kernel itself: each stage file exposes a host entry point that
+carries its own grid and block geometry, declared in `stages.cuh`, so a launch
+configuration lives next to the kernel it belongs to. `common.cuh` holds the
+triangle and material layouts both sides read. cub is pulled in by `binning.cu`
+alone.
 
 `ssao_debug`, which renders the occlusion term, normals or depth on their own,
 is the twelfth.
@@ -241,7 +249,5 @@ rasterizer will not start rather than falling back.
 - `meshes()` is a function-local static that outlives the rasterizer. That is
   what lets uploaded geometry survive a supersampling change, but it is
   load-bearing by accident rather than by design.
-- `cuda_triangle.cu` is ~1,840 lines and twelve kernels under a filename that
-  says "triangle".
 - Device mesh slots are never reused. The device memory is freed, but the
   descriptor vector only grows.

@@ -1,0 +1,50 @@
+// Host entry points for the pipeline stages. Each launcher owns its own grid
+// and block geometry, so the sizes stay with the kernel they belong to rather
+// than at the call site.
+#pragma once
+
+#include "common.cuh"
+
+// setup.cu: transform every queued mesh, cull, append survivors
+void cudaLaunchMeshSetup(const MeshDraw* draws, int ndraws, int total_faces,
+                         CudaTriangle* out, int* out_count, int max_out,
+                         int width, int height, int* stats);
+
+// binning.cu: count -> exclusive scan -> scatter, giving each tile its own
+// exact slice of one flat index buffer. The scan's scratch space is sized by
+// the first call and owned by the caller.
+size_t cudaBinScanTempBytes(int num_tiles);
+void cudaBinCount(const CudaTriangle* triangles, int num_triangles,
+                  int* tile_counts, int tiles_x, int tiles_y);
+void cudaBinScan(void* temp, size_t temp_bytes, const int* tile_counts,
+                 int* tile_offsets, int num_tiles);
+void cudaBinScatter(const CudaTriangle* triangles, int num_triangles,
+                    const int* tile_offsets, int* tile_cursor, int* tri_indices,
+                    int tiles_x, int tiles_y);
+
+// raster.cu: depth clear, then one block per tile for either pass
+void cudaLaunchZbufferFill(int* zbuffer, int fill_val, int count);
+void cudaLaunchTiledRaster(const CudaTriangle* triangles, const int* tile_counts,
+                           const int* tile_offsets, const int* tri_indices,
+                           const CudaMaterial* materials,
+                           unsigned char* framebuffer, int* zbuffer,
+                           const int* shadowbuf, float* normalbuf,
+                           int width, int height, int tiles_x, int tiles_y);
+void cudaLaunchShadowRaster(const CudaTriangle* triangles, const int* tile_counts,
+                            const int* tile_offsets, const int* tri_indices,
+                            int* shadowbuf,
+                            int width, int height, int tiles_x, int tiles_y);
+
+// ssao.cu: occlude the finished frame in place. ao and ao_blur are scratch.
+void cudaLaunchSSAO(const int* zbuffer, const float* normalbuf,
+                    float* ao, float* ao_blur, unsigned char* framebuffer,
+                    const float* inv_vp, const float* vp,
+                    const float* kernel_samples,
+                    float radius, float bias, float intensity,
+                    int ssao_debug, int width, int height);
+
+// resolve.cu: supersample resolve and background composite
+void cudaLaunchDownsample(const unsigned char* src, unsigned char* dst,
+                          int out_w, int out_h, int ss);
+void cudaLaunchBackground(unsigned char* framebuffer, cudaTextureObject_t bg,
+                          int width, int height);
