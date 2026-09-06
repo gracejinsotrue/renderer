@@ -334,6 +334,11 @@ void tiled_raster_kernel(const CudaTriangle* triangles,
             float diff = nxi*mat.lx + nyi*mat.ly + nzi*mat.lz;
             if (diff < 0.0f) diff = 0.0f;
 
+            // geometric normal against the light, kept signed and unmapped.
+            // the shadow bias below scales with it, and the normal map's
+            // high-frequency detail would only make that bias noisy.
+            float gdotl = gnx*mat.lx + gny*mat.ly + gnz*mat.lz;
+
             // shadow lookup. the fragment's screen-space position goes back
             // through the camera transform and forward through the light's, so
             // (x, y, depth) is exactly what the matrix expects.
@@ -349,11 +354,23 @@ void tiled_raster_kernel(const CudaTriangle* triangles,
                 int ix = (int)sx, iy = (int)sy;
                 if (ix >= 0 && ix < width && iy >= 0 && iy < height) {
                     float stored = __int_as_float(shadowbuf[iy * width + ix]);
+                    // How fast this surface recedes from the light across one
+                    // shadow texel. Seen edge-on it changes depth a lot, and a
+                    // flat bias reads that slope as an occluder, which is what
+                    // put dark patches over every curved surface: clothing over
+                    // a body sits well inside a constant bias big enough to
+                    // cover the glancing case. Scaling by the slope separates
+                    // "this surface tilts away from the light" from "something
+                    // is actually between it and the light".
+                    float slope = sqrtf(fmaxf(0.0f, 1.0f - gdotl * gdotl))
+                                / fmaxf(fabsf(gdotl), 0.15f);
+                    float bias_eff = mat.shadow_bias * (1.0f + slope);
+
                     // nearest-to-light is the MAX depth, so a fragment is
                     // lit when it is at least as near as what the light
                     // recorded. bias is a parameter because depth spans 0..255
                     // regardless of world scale.
-                    shadow = (sz + mat.shadow_bias >= stored) ? 1.0f : 0.3f;
+                    shadow = (sz + bias_eff >= stored) ? 1.0f : 0.3f;
                     if (mat.debug_shadow) {
                         framebuffer[color_idx + 0] = (unsigned char)fminf(fmaxf(sz,0.f),255.f);
                         framebuffer[color_idx + 1] = (unsigned char)fminf(fmaxf(stored,0.f),255.f);
