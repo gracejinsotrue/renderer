@@ -140,9 +140,15 @@ add_library(render_core STATIC
   src/cuda/raster.cu
   src/cuda/ssao.cu
   src/cuda/resolve.cu
-  src/cuda/rasterizer.cu)
+  src/cuda/rasterizer.cu
 
-target_link_libraries(render_core PUBLIC project_flags)
+  # not a pipeline stage: presents the finished frame without a host round trip
+  src/cuda/present.cu)
+
+# present.cu calls into the GL driver via cuda_gl_interop.h.
+find_package(OpenGL REQUIRED)
+
+target_link_libraries(render_core PUBLIC project_flags OpenGL::GL)
 
 # No __device__ symbol crosses a translation unit, so separable compilation
 # is not needed and whole-program device linking stays off.
@@ -154,7 +160,7 @@ set_target_properties(render_core PROPERTIES
 # render_engine: the SDL2 window, input, and frame loop
 # ---------------------------------------------------------------------------
 
-add_library(render_engine STATIC src/Engine.cpp)
+add_library(render_engine STATIC src/Engine.cpp src/GLPresenter.cpp)
 target_link_libraries(render_engine PUBLIC render_core ${SDL2_LINK_TARGETS})
 
 # ---------------------------------------------------------------------------

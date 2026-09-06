@@ -10,6 +10,7 @@
 #include "Scene.h" // new scene system!
 #include "transform.h"
 #include "tgaimage.h"
+#include "GLPresenter.h"
 
 extern "C"
 {
@@ -58,8 +59,14 @@ class Engine
 {
 private:
     SDL_Window *window;
+    // Only one of these two is live. GLPresenter is preferred; the
+    // SDL_Renderer pair is the fallback for when there is no GL context at
+    // all, which is how the headless tests run.
     SDL_Renderer *sdlRenderer;
     SDL_Texture *frameTexture;
+    GLPresenter glPresenter;
+    // window was created GL-capable, so a presenter is worth attempting
+    bool wantGLPresent;
 
     Scene scene;
     // host copy, written only when captureFrame() asks for a TGA
@@ -179,6 +186,18 @@ public:
         return std::min(fps, 60.0f);
     }
     bool isCudaAvailable() const { return cuda_available; }
+
+    // Switches the present path between the host copy and CUDA/GL interop
+    // in place, so the two can be compared inside one run rather than across
+    // process launches. Does nothing when interop is unavailable.
+    void togglePresentMode();
+
+    // Alternates the two present paths in interleaved blocks and reports what
+    // each costs. Blocks alternate rather than running all of one then all of
+    // the other, because this machine's clocks drift enough over a run that a
+    // sequential A-then-B would hand the difference to whichever went second.
+    // Returns false if there is no GL presenter to measure.
+    bool benchmarkPresent(int blocks = 8, int framesPerBlock = 120);
 
     void setSSAA(int factor);
     int getSSAA() const { return ssaaFactor; }

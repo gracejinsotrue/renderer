@@ -9,6 +9,7 @@
 
 Engine::Engine(int winWidth, int winHeight, int renWidth, int renHeight)
     : window(nullptr), sdlRenderer(nullptr), frameTexture(nullptr),
+      wantGLPresent(false),
       captureStaging(renWidth, renHeight, TGAImage::RGB),
       uploadedBackgroundVersion(-1), cachedGeometryVersion(0),
       running(false), showStats(true), ssaaFactor(2),
@@ -43,11 +44,25 @@ bool Engine::init()
         return false;
     }
 
-    // window
-    window = SDL_CreateWindow("MULTI OBJECT 3D ENGINE THIS BETTER WORK!!!",
+    // Ask for a GL-capable window first, because the interop present path
+    // needs one and the flag can only be set at creation. Headless (SDL's
+    // dummy video driver) refuses it, which is not an error: the SDL_Renderer
+    // fallback below handles that case and the tests run through it.
+    const Uint32 baseFlags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
+    const char *title = "MULTI OBJECT 3D ENGINE THIS BETTER WORK!!!";
+
+    window = SDL_CreateWindow(title,
                               SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                               windowWidth, windowHeight,
-                              SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+                              baseFlags | SDL_WINDOW_OPENGL);
+    bool glCapableWindow = (window != nullptr);
+
+    if (!window)
+    {
+        window = SDL_CreateWindow(title,
+                                  SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                                  windowWidth, windowHeight, baseFlags);
+    }
 
     if (!window)
     {
@@ -55,24 +70,10 @@ bool Engine::init()
         return false;
     }
 
-    // create the renderer
-    sdlRenderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
-    if (!sdlRenderer)
-    {
-        std::cerr << "Renderer creation failed: " << SDL_GetError() << std::endl;
-        return false;
-    }
-
-    // create texture for framebuffer
-    frameTexture = SDL_CreateTexture(sdlRenderer, SDL_PIXELFORMAT_RGB24,
-                                     SDL_TEXTUREACCESS_STREAMING,
-                                     renderWidth, renderHeight);
-
-    if (!frameTexture)
-    {
-        std::cerr << "Texture creation failed: " << SDL_GetError() << std::endl;
-        return false;
-    }
+    // The presenter is created after the rasterizer, further down: registering
+    // a PBO with CUDA wants the CUDA context to exist already. Only if that
+    // fails do the SDL_Renderer objects below get built.
+    wantGLPresent = glCapableWindow;
 
     // initialize timing
     lastTime = std::chrono::high_resolution_clock::now();
@@ -110,6 +111,7 @@ bool Engine::init()
     std::cout << "  , / .        - Occlusion strength" << std::endl;
     std::cout << "  ;            - Cycle occlusion debug views" << std::endl;
     std::cout << "  T            - Stats overlay" << std::endl;
+    std::cout << "  K            - Present path: host copy or GL interop" << std::endl;
     std::cout << "  Arrow keys   - Move the light" << std::endl;
     std::cout << "  P            - Capture frame to output.tga" << std::endl;
     std::cout << "  B / C        - Load / clear background image" << std::endl;
@@ -121,6 +123,37 @@ bool Engine::init()
         std::cerr << "CUDA rasterizer failed to initialize. Rendering happens "
                      "on the GPU; there is no CPU fallback." << std::endl;
         return false;
+    }
+
+    // The frame is always renderWidth x renderHeight by the time it reaches
+    // the presenter: supersampling is resolved on the device, so changing the
+    // SSAA factor never resizes anything here.
+    if (wantGLPresent && glPresenter.create(window, renderWidth, renderHeight))
+    {
+        std::cout << "present path: " << glPresenter.modeName();
+        if (!glPresenter.interopAvailable())
+            std::cout << " (interop unavailable on this GL context)";
+        else
+            std::cout << " - K to switch";
+        std::cout << std::endl;
+    }
+    else
+    {
+        sdlRenderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+        if (!sdlRenderer)
+        {
+            std::cerr << "Renderer creation failed: " << SDL_GetError() << std::endl;
+            return false;
+        }
+
+        frameTexture = SDL_CreateTexture(sdlRenderer, SDL_PIXELFORMAT_RGB24,
+                                         SDL_TEXTUREACCESS_STREAMING,
+                                         renderWidth, renderHeight);
+        if (!frameTexture)
+        {
+            std::cerr << "Texture creation failed: " << SDL_GetError() << std::endl;
+            return false;
+        }
     }
 
     return true;
@@ -463,6 +496,12 @@ void Engine::handleEvents()
 
             case SDLK_o:
                 toggleSSAO();
+                break;
+
+            // host copy vs CUDA/GL interop, switched in place so both can be
+            // measured in one run under the same thermal and driver state
+            case SDLK_k:
+                togglePresentMode();
                 break;
 
             // 1x, 2x, 4x supersampling
@@ -967,7 +1006,15 @@ void Engine::renderScene()
 
 void Engine::present()
 {
-    // convert TGA framebuffer to SDL texture
+    // GL path: both of its modes end at the same texture and quad, so the
+    // only thing that differs between them is how the pixels get there.
+    if (glPresenter.isValid())
+    {
+        glPresenter.present();
+        return;
+    }
+
+    // SDL_Renderer fallback, used when there is no GL context at all.
     void *pixels;
     int pitch;
 
@@ -1087,6 +1134,10 @@ void Engine::shutdown()
         cudaMeshes.clear();
         cleanupCudaRasterizer();
     }
+
+    // before the window: the GL context is owned by the presenter and the
+    // registered PBO has to be handed back to CUDA while it still exists
+    glPresenter.destroy();
 
     if (frameTexture)
     {
@@ -1208,6 +1259,93 @@ int Engine::getCudaMesh(Model *model)
 // Rebuilds the device buffers at the new size. Meshes live in storage that
 // outlives the rasterizer instance, so the uploaded geometry and its textures
 // survive and the handles stay valid.
+bool Engine::benchmarkPresent(int blocks, int framesPerBlock)
+{
+    if (!glPresenter.isValid())
+    {
+        std::cerr << "no GL presenter: nothing to compare" << std::endl;
+        return false;
+    }
+    if (!glPresenter.interopAvailable())
+    {
+        std::cerr << "interop unavailable on this GL context: nothing to compare"
+                  << std::endl;
+        return false;
+    }
+
+    double upload[2] = {0.0, 0.0};   // indexed by GLPresenter::Mode
+    double frame[2] = {0.0, 0.0};
+    long   count[2] = {0, 0};
+
+    std::cout << "\npresent A/B: " << blocks << " blocks of " << framesPerBlock
+              << " frames, alternating" << std::endl;
+
+    for (int b = 0; b < blocks; b++)
+    {
+        GLPresenter::Mode m = (b % 2 == 0) ? GLPresenter::Interop
+                                           : GLPresenter::HostCopy;
+        glPresenter.setMode(m);
+
+        for (int f = 0; f < framesPerBlock; f++)
+        {
+            scene.updateAllTransforms();
+            render();
+
+            auto t0 = std::chrono::high_resolution_clock::now();
+            present();
+            double frame_ms = std::chrono::duration<double, std::milli>(
+                                  std::chrono::high_resolution_clock::now() - t0)
+                                  .count();
+
+            // The first block of each mode warms the driver's buffers; the
+            // first frame after a mode switch also pays for the change.
+            if (b < 2 || f == 0) continue;
+
+            upload[m] += glPresenter.lastUploadMs();
+            frame[m] += frame_ms;
+            count[m] += 1;
+        }
+    }
+
+    if (count[0] == 0 || count[1] == 0)
+    {
+        std::cerr << "not enough samples" << std::endl;
+        return false;
+    }
+
+    std::cout << "\n  path        upload ms   present ms   frames" << std::endl;
+    for (int m = 1; m >= 0; m--)
+    {
+        const char *name = (m == GLPresenter::Interop) ? "interop  " : "host copy";
+        printf("  %s   %8.3f   %10.3f   %6ld\n", name,
+               upload[m] / count[m], frame[m] / count[m], count[m]);
+    }
+
+    double d = (upload[GLPresenter::HostCopy] / count[GLPresenter::HostCopy]) -
+               (upload[GLPresenter::Interop] / count[GLPresenter::Interop]);
+    printf("\n  interop saves %.3f ms per frame on the upload\n", d);
+
+    glPresenter.setMode(GLPresenter::Interop);
+    return true;
+}
+
+void Engine::togglePresentMode()
+{
+    if (!glPresenter.isValid()) return;
+
+    if (!glPresenter.interopAvailable())
+    {
+        std::cout << "interop is not available on this GL context" << std::endl;
+        return;
+    }
+
+    glPresenter.setMode(glPresenter.getMode() == GLPresenter::Interop
+                            ? GLPresenter::HostCopy
+                            : GLPresenter::Interop);
+
+    std::cout << "present path: " << glPresenter.modeName() << std::endl;
+}
+
 void Engine::setSSAA(int factor)
 {
     if (factor < 1) factor = 1;

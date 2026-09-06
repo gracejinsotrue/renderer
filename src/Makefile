@@ -8,16 +8,16 @@ NVCC = /usr/local/cuda/bin/nvcc
 NVCC_CCBIN = g++-11
 NVCCFLAGS = -std=c++17 -O2 -ccbin $(NVCC_CCBIN) -I.
 INCLUDES = -I/usr/include/SDL2
-LIBS = -lSDL2 -lSDL2main -lm
+LIBS = -lSDL2 -lSDL2main -lm -lGL
 
 # source files
-SOURCES = main.cpp Engine.cpp model.cpp transform.cpp tgaimage.cpp geometry.cpp Scene.cpp SceneNode.cpp
+SOURCES = main.cpp Engine.cpp GLPresenter.cpp model.cpp transform.cpp tgaimage.cpp geometry.cpp Scene.cpp SceneNode.cpp
 OBJECTS = $(SOURCES:.cpp=.o)
 
 # the GPU pipeline, one file per stage. rasterizer.cu owns the device
 # memory and sequences the rest; cuda/stages.cuh is the boundary.
 CUDA_SOURCES = cuda/setup.cu cuda/binning.cu cuda/raster.cu cuda/ssao.cu \
-               cuda/resolve.cu cuda/rasterizer.cu
+               cuda/resolve.cu cuda/rasterizer.cu cuda/present.cu
 CUDA_OBJECTS = $(CUDA_SOURCES:.cu=.o)
 
 TARGET = unified_engine
@@ -73,7 +73,7 @@ tools: $(TESTOBJS)
 	done
 
 # Headless end-to-end test of the real Engine (needs SDL2 + the scene graph).
-ENGOBJS = Engine.o Scene.o SceneNode.o model.o transform.o tgaimage.o \
+ENGOBJS = Engine.o GLPresenter.o Scene.o SceneNode.o model.o transform.o tgaimage.o \
           geometry.o $(CUDA_OBJECTS)
 
 test_ssao: $(ENGOBJS)
