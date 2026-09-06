@@ -42,6 +42,8 @@ extern "C"
     void cudaApplySSAO(const float *inv_vp16, const float *vp16,
                        float radius, float intensity, float bias, int debug);
     void cudaDestroyMesh(int handle);
+    // meshes still holding device memory, for leak checks in the tests
+    int cudaLiveMeshCount();
     // mshadow16 may be NULL for an unshadowed draw
     void cudaDrawMesh(int handle, const float *mvp16, const float *clip16,
                       const float *mit16,
@@ -77,6 +79,10 @@ private:
     // how a rasterizer resize gets its textures back.
     long uploadedBackgroundVersion;
     void syncBackground();
+
+    // Scene::geometryVersion as of the last time cudaMeshes was known good.
+    long cachedGeometryVersion;
+    void syncGeometry();
 
     // Input state
     bool keys[SDL_NUM_SCANCODES];

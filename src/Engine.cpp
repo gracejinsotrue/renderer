@@ -10,7 +10,7 @@
 Engine::Engine(int winWidth, int winHeight, int renWidth, int renHeight)
     : window(nullptr), sdlRenderer(nullptr), frameTexture(nullptr),
       captureStaging(renWidth, renHeight, TGAImage::RGB),
-      uploadedBackgroundVersion(-1),
+      uploadedBackgroundVersion(-1), cachedGeometryVersion(0),
       running(false), showStats(true), ssaaFactor(2),
       ssaoEnabled(true), ssaoRadius(0.18f), ssaoIntensity(0.85f), ssaoDebug(0),
       windowWidth(winWidth), windowHeight(winHeight), renderWidth(renWidth), renderHeight(renHeight),
@@ -830,6 +830,7 @@ void Engine::renderScene()
     scene.getVisibleMeshNodes(visibleMeshes);
 
     syncBackground();
+    syncGeometry();
 
     // before the early return: present() blits whatever is in device memory,
     // so an empty scene has to clear it or the last drawn frame persists.
@@ -1112,6 +1113,21 @@ void Engine::shutdown()
 
 // uploads a model's geometry to the device the first time it is drawn, then
 // hands back the same handle every frame after that.
+// cudaMeshes is keyed by Model*, and Scene::clear() frees every Model. Holding
+// the cache across that leaks the device meshes, and worse: the allocator can
+// hand a newly loaded Model the address of one just freed, and the stale entry
+// then draws the old geometry.
+void Engine::syncGeometry()
+{
+    if ((long)scene.geometryVersion == cachedGeometryVersion)
+        return;
+
+    for (auto &kv : cudaMeshes)
+        cudaDestroyMesh(kv.second);
+    cudaMeshes.clear();
+    cachedGeometryVersion = (long)scene.geometryVersion;
+}
+
 // The background is a texture on the device, so it only needs re-uploading
 // when it actually changes. clear() composites it; nothing here draws.
 void Engine::syncBackground()

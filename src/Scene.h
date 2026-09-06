@@ -68,6 +68,10 @@ public:
     // bumped on every load and clear. a fresh TGAImage can reuse the address
     // of the one just freed, so consumers cannot detect a change by pointer.
     unsigned backgroundVersion;
+    // bumped whenever a Model is destroyed, which only clear() does. anything
+    // caching by Model* has to drop that cache: a newly loaded Model can land
+    // on the address of one just freed.
+    unsigned geometryVersion;
 
     Scene();
     ~Scene();

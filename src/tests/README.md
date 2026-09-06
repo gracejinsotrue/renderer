@@ -8,6 +8,7 @@ window, no SDL, no interaction. Each one asserts and exits non-zero on failure.
     make test_ssao      # ambient occlusion, same requirements
     make test_ssaa      # supersampling, same requirements
     make test_background # background compositing, same requirements
+    make test_meshcache # device geometry cache lifetime, same requirements
 
 Run them from `src/` so the relative model paths resolve.
 
@@ -28,6 +29,7 @@ independent implementation to disagree with.
 | `test_ssao` | does ambient occlusion darken cavities without touching exposed surfaces, the background, or the geometry? |
 | `test_ssaa` | does supersampling anti-alias the silhouette without moving, rescaling or blurring the image? |
 | `test_background` | does the background composite on the GPU, under the geometry, the right way up? |
+| `test_meshcache` | does the Model -> device mesh cache get dropped when Scene::clear() frees the Models? |
 
 `test_engine` runs headless via SDL's dummy video driver and steps `render()`
 directly instead of calling `run()`. It is the only test that covers the
@@ -38,6 +40,12 @@ just checking that the frame changed. "SSAO changed something" is nearly
 free to satisfy and would pass on a pass that merely dimmed the image; the
 ratio between the two landmarks is what actually separates occlusion from a
 brightness slider.
+
+`test_meshcache` counts live device meshes rather than comparing pixels for
+its main assertion. The failure it guards against is a cache keyed by `Model*`
+outliving the Models: whether that draws the wrong geometry depends on the
+allocator handing a new Model the address of a freed one, so a pixel check
+would fail only sometimes. The leak is there on every run.
 
 `test_background` uses a two-band image rather than a flat colour. A flat
 background cannot tell a correct composite from a vertically flipped one,

@@ -40,7 +40,7 @@ void Camera::lookAt(Vec3f eye, Vec3f center, Vec3f up_vec)
 
 // scene implementation
 Scene::Scene() : selectedNode(nullptr), nodeCounter(0), background(nullptr),
-                 backgroundVersion(0)
+                 backgroundVersion(0), geometryVersion(0)
 {
     rootNode = std::make_unique<SceneNode>("Root", SceneNode::EMPTY);
 }
@@ -249,6 +249,7 @@ void Scene::clear()
 {
     selectedNode = nullptr;
     loadedModels.clear(); // This will delete all models
+    geometryVersion++;
     rootNode = std::make_unique<SceneNode>("Root", SceneNode::EMPTY);
     nodeCounter = 0;
     std::cout << "Scene cleared" << std::endl;

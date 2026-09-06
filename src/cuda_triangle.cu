@@ -1541,6 +1541,15 @@ public:
         return (int)meshes().size() - 1;
     }
 
+    // meshes still holding device memory. slots are never reused, so this is
+    // a count of the live ones, not of meshes().size().
+    int liveMeshCount() {
+        int n = 0;
+        for (size_t i = 0; i < meshes().size(); i++)
+            if (meshes()[i].alive) n++;
+        return n;
+    }
+
     void destroyMesh(int h) {
         if (h < 0 || h >= (int)meshes().size()) return;
         DeviceMesh& dm = meshes()[h];
@@ -1741,6 +1750,9 @@ extern "C" {
     }
     void cudaClearBackground() {
         if (g_cuda_rasterizer) g_cuda_rasterizer->clearBackground();
+    }
+    int cudaLiveMeshCount() {
+        return g_cuda_rasterizer ? g_cuda_rasterizer->liveMeshCount() : 0;
     }
     void cudaDestroyMesh(int handle) {
         if (g_cuda_rasterizer) g_cuda_rasterizer->destroyMesh(handle);
