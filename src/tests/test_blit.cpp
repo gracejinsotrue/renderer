@@ -35,7 +35,9 @@ int main() {
     // triangle sitting at LOW raster y. raster y=0 is the BOTTOM of the image
     // (TGAImage is bottom-up), so this must show up near the bottom on screen.
     // note the winding: the other order is backface-culled now
-    cudaRenderTriangle(mk4(2,2,10,1), mk4(2,20,10,1), mk4(40,2,10,1),
+    // wound counter-clockwise in screen space, which is the front-facing
+    // direction the rasterizer keeps; the other order is culled by design
+    cudaRenderTriangle(mk4(2,2,10,1), mk4(40,2,10,1), mk4(2,20,10,1),
                        TGAColor(255, 0, 0));
 
     // --- fast path: device -> SDL-style RGB24, top-down ---

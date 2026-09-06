@@ -85,6 +85,10 @@ bench_meshes: $(ENGOBJS)
 	mkdir -p tests/bin
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -I. -o tests/bin/bench_meshes 	  tests/bench_meshes.cpp $(ENGOBJS) $(LIBS) 	  -L/usr/local/cuda/lib64 -lcudart
 
+capture_scene: $(ENGOBJS)
+	mkdir -p tests/bin
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -I. -o tests/bin/capture_scene 	  tests/capture_scene.cpp $(ENGOBJS) $(LIBS) 	  -L/usr/local/cuda/lib64 -lcudart
+
 test_meshcache: $(ENGOBJS)
 	mkdir -p tests/bin
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -I. -o tests/bin/test_meshcache 	  tests/test_meshcache.cpp $(ENGOBJS) $(LIBS) 	  -L/usr/local/cuda/lib64 -lcudart

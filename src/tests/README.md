@@ -47,6 +47,15 @@ outliving the Models: whether that draws the wrong geometry depends on the
 allocator handing a new Model the address of a freed one, so a pixel check
 would fail only sometimes. The leak is there on every run.
 
+Backface culling is the one thing here no differential test can check. Both
+rasterizers shared an inverted sign, so they agreed exactly on a wrong image:
+from the front, culling the front faces of a closed mesh leaves the inside of
+its far side, which keeps a plausible silhouette while lighting it by normals
+that point away. What catches it is that culling is only ever an optimization,
+so for a closed mesh the render has to be identical with it disabled. Comparing
+against a no-cull render is the check; `capture_scene` is there to make that
+comparison easy.
+
 `test_background` uses a two-band image rather than a flat colour. A flat
 background cannot tell a correct composite from a vertically flipped one,
 which is the mistake the first version of the kernel actually made.
@@ -83,6 +92,7 @@ the measurement that justifies batching the setup launch.
 | `bench_tile` | tile size sweep |
 | `profile_frame` | per-stage frame breakdown (setup / bin / raster / DMA) |
 | `bench_meshes` | per-frame cost against mesh count, through the real Engine |
+| `capture_scene` | renders any set of models headless to a TGA, for eyeballing |
 | `render_png` | renders a model to TGA so the shading can be looked at |
 
 `render_png` takes: `model out [gpu|cpu] [texmask dns] [S|N shadows] [bias]

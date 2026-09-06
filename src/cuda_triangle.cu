@@ -759,10 +759,16 @@ void mesh_setup_kernel(const MeshDraw* draws, int ndraws, int total_faces,
     outside = true;
     for (int k = 0; k < 3; k++) if (cv[k].y <= cv[k].w) outside = false;
     if (outside) { atomicAdd(&stats[1], 1); return; }
-    // same cull test and sign convention as the host path and the CPU reference
+    // Backface cull. The models wind front faces counter-clockwise in screen
+    // space, so a front face has a POSITIVE edge cross product and a negative
+    // one faces away. Culling is only ever an optimization: for a closed mesh
+    // the image has to be identical with it on and off, which is the check
+    // that settles the sign (it was inverted here, and from the front that
+    // leaves the inside of the far side of the mesh, which keeps a plausible
+    // silhouette while lighting it by normals that point away).
     float facing = (sx[1] - sx[0]) * (sy[2] - sy[0])
                  - (sy[1] - sy[0]) * (sx[2] - sx[0]);
-    if (facing >= 0.0f) { atomicAdd(&stats[0], 1); return; }
+    if (facing <= 0.0f) { atomicAdd(&stats[0], 1); return; }
 
     int bx0 = max(0,          (int)floorf(fminf(fminf(sx[0], sx[1]), sx[2])));
     int bx1 = min(width  - 1, (int)ceilf (fmaxf(fmaxf(sx[0], sx[1]), sx[2])));
@@ -1271,11 +1277,9 @@ public:
         float sx1 = v1x / v1w, sy1 = v1y / v1w;
         float sx2 = v2x / v2w, sy2 = v2y / v2w;
 
-        // backface cull, same test and sign convention as the CPU reference: the
-        // sign of the screen-space edge cross product says which way the
-        // triangle faces.
+        // backface cull, same sign convention as mesh_setup_kernel above
         float facing = (sx1 - sx0) * (sy2 - sy0) - (sy1 - sy0) * (sx2 - sx0);
-        if (facing >= 0.0f) {
+        if (facing <= 0.0f) {
             stat_culled_back++;
             return;
         }

@@ -77,15 +77,19 @@ int main(int argc, char **argv)
     engine.captureFrame("/tmp/t_ssao_on.tga");
     TGAImage on; on.read_tga_file("/tmp/t_ssao_on.tga");
 
-    // landmarks on african_head at the default camera, in TGA coordinates
+    // Landmarks on african_head at the default camera, in TGA coordinates.
+    // Re-derived after the backface cull sign was fixed: the previous pair
+    // was chosen against a render that was drawing the inside of the far
+    // side of the mesh, so those coordinates no longer sit on the features
+    // they were named for. These two are the jaw/neck crease, which is a real
+    // cavity, and the open chest, which sees the whole hemisphere.
     const int R = 6;
-    double convex_off = boxMean(off, 400, 180, R);   // forehead, open to the sky
-    double convex_on  = boxMean(on,  400, 180, R);
-    double concave_off = boxMean(off, 350, 265, R);  // eye socket
-    double concave_on  = boxMean(on,  350, 265, R);
-
-    printf("  forehead   %.2f -> %.2f\n", convex_off, convex_on);
-    printf("  eye socket %.2f -> %.2f\n", concave_off, concave_on);
+    double convex_off = boxMean(off, 458, 122, R);   // open chest
+    double convex_on  = boxMean(on,  458, 122, R);
+    double concave_off = boxMean(off, 474, 294, R);  // jaw meets neck
+    double concave_on  = boxMean(on,  474, 294, R);
+    printf("  chest    %.2f -> %.2f\n", convex_off, convex_on);
+    printf("  jaw/neck %.2f -> %.2f\n", concave_off, concave_on);
 
     check(convex_off > 0 && concave_off > 0, "both landmarks have geometry on them");
 
@@ -93,7 +97,7 @@ int main(int argc, char **argv)
     // exposed surface. a pass that merely dimmed the image would fail here.
     double convex_drop = 1.0 - convex_on / std::max(1e-6, convex_off);
     double concave_drop = 1.0 - concave_on / std::max(1e-6, concave_off);
-    printf("  darkening: forehead %.1f%%, eye socket %.1f%%\n",
+    printf("  darkening: chest %.1f%%, jaw/neck %.1f%%\n",
            convex_drop * 100.0, concave_drop * 100.0);
     check(concave_drop > convex_drop + 0.05,
           "a cavity darkens meaningfully more than an exposed surface");

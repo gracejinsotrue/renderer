@@ -50,13 +50,16 @@ void triangle(Vec4f *pts, IShader &shader, TGAImage &image, TGAImage &zbuffer)
         screen_coords[i] = Vec2f(pts[i][0] / pts[i][3], pts[i][1] / pts[i][3]);
     }
 
-    // we do a little backface culling: Check winding order using cross product
+    // backface culling by screen-space winding order. front faces wind
+    // counter-clockwise, giving a positive cross product; the kernels use the
+    // same convention, and a differential test cannot catch this sign being
+    // wrong because both sides would be wrong together. Comparing against a
+    // render with culling disabled is what catches it.
     Vec2f edge1 = screen_coords[1] - screen_coords[0];
     Vec2f edge2 = screen_coords[2] - screen_coords[0];
     float cross = edge1.x * edge2.y - edge1.y * edge2.x;
 
-    // If cross product is POSITIVE!!!!, triangle faces away - skip it
-    if (cross >= 0.0f)
+    if (cross <= 0.0f)
     {
         return;
     }
