@@ -34,3 +34,10 @@ src/tests/test_wind.cpp
 build/
 build-*/
 CMakeUserPresets.json
+
+# Nsight capture output. profile.ps1 writes to TEMP, but nsys drops
+# intermediates in the working directory when a run is interrupted.
+*.nsys-rep
+*.ncu-rep
+*.qdstrm
+*.sqlite
