@@ -14,11 +14,19 @@ Engine::Engine(int winWidth, int winHeight, int renWidth, int renHeight)
       running(false), showStats(true), ssaaFactor(2),
       ssaoEnabled(true), ssaoRadius(0.18f), ssaoIntensity(0.85f), ssaoDebug(0),
       windowWidth(winWidth), windowHeight(winHeight), renderWidth(renWidth), renderHeight(renHeight),
-      mouseX(0), mouseY(0), mouseDeltaX(0), mouseDeltaY(0), lastMouseX(0), lastMouseY(0), mousePressed(false)
+      mouseX(0), mouseY(0), mouseDeltaX(0), mouseDeltaY(0), lastMouseX(0), lastMouseY(0), mousePressed(false),
+      cameraRotationX(0.0f), cameraRotationY(0.0f), orbitMode(true)
 
 {
     // init imput state
     memset(keys, 0, sizeof(keys));
+
+    // Derived from the camera rather than hardcoded, so the orbit state agrees
+    // with where the camera actually starts. At yaw 0 / pitch 0 the orbit
+    // offset is (0, 0, cameraDistance), which is the Camera default, so the
+    // first drag continues from the opening view instead of jumping.
+    cameraTarget = scene.camera.target;
+    cameraDistance = (scene.camera.position - scene.camera.target).norm();
 }
 
 Engine::~Engine()
@@ -192,10 +200,6 @@ void Engine::updateCameraPosition()
 {
     if (orbitMode)
     {
-        // debug the rotation values
-        std::cout << "cameraRotationX (pitch): " << cameraRotationX << " radians (" << (cameraRotationX * 180.0f / M_PI) << " degrees)" << std::endl;
-        std::cout << "cameraRotationY (yaw): " << cameraRotationY << " radians (" << (cameraRotationY * 180.0f / M_PI) << " degrees)" << std::endl;
-
         // Standard spherical to cartesian conversion
         // X rotation is pitch (up/down), Y rotation is yaw (left/right)
         float cosPitch = cos(cameraRotationX);
@@ -210,12 +214,6 @@ void Engine::updateCameraPosition()
 
         scene.camera.position = cameraTarget + offset;
         scene.camera.target = cameraTarget;
-
-        std::cout << "Camera offset: (" << offset.x << ", " << offset.y << ", " << offset.z << ")" << std::endl;
-        std::cout << "Updated camera position: (" << scene.camera.position.x
-                  << ", " << scene.camera.position.y << ", " << scene.camera.position.z << ")" << std::endl;
-        std::cout << "Camera target: (" << scene.camera.target.x
-                  << ", " << scene.camera.target.y << ", " << scene.camera.target.z << ")" << std::endl;
     }
 }
 
