@@ -656,18 +656,54 @@ static const int MAX_BATCH = 262144;
 // row-major 4x4, passed to the setup kernel by value
 struct Mat4 { float m[16]; };
 
-// transforms a whole mesh and does setup (cull + bbox) on the GPU, appending
-// survivors straight into the shared triangle buffer.
+// One queued mesh. Geometry pointers are device-resident and owned by the
+// DeviceMesh; only the matrices change from frame to frame.
+struct MeshDraw {
+    const float* verts;
+    const int*   faces;
+    const float* cnorms;
+    const float* cuvs;
+    int nfaces;
+    int face_begin;        // running total over the queue, so one launch can
+                           // cover every mesh and each thread find its own
+    Mat4 mvp, clip, mit;
+    int mat_id;
+    CudaColor color;
+};
+
+// Transforms every queued mesh and does setup (cull + bbox), appending
+// survivors straight into the shared triangle buffer. One launch covers the
+// whole scene: a launch costs ~11us here, which a 40-mesh scene would
+// otherwise pay 80 times a frame across the two passes.
 __global__
-void mesh_setup_kernel(const float* verts, const int* faces, int nfaces,
-                       const float* cnorms, const float* cuvs,
-                       Mat4 mvp, Mat4 clip, Mat4 mit, int mat_id,
-                       CudaColor color,
+void mesh_setup_kernel(const MeshDraw* draws, int ndraws, int total_faces,
                        CudaTriangle* out, int* out_count, int max_out,
                        int width, int height, int* stats)
 {
-    int f = blockIdx.x * blockDim.x + threadIdx.x;
-    if (f >= nfaces) return;
+    int gid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (gid >= total_faces) return;
+
+    // which mesh owns this face. face_begin is ascending, so this is an
+    // upper bound search for the last draw starting at or before gid.
+    int lo = 0, hi = ndraws - 1, d = 0;
+    while (lo <= hi) {
+        int mid = (lo + hi) >> 1;
+        if (gid < draws[mid].face_begin) hi = mid - 1;
+        else { d = mid; lo = mid + 1; }
+    }
+
+    const MeshDraw& dr = draws[d];
+    const float* verts = dr.verts;
+    const int* faces = dr.faces;
+    const float* cnorms = dr.cnorms;
+    const float* cuvs = dr.cuvs;
+    const Mat4& mvp = dr.mvp;
+    const Mat4& clip = dr.clip;
+    const Mat4& mit = dr.mit;
+    const int mat_id = dr.mat_id;
+    const CudaColor color = dr.color;
+
+    int f = gid - dr.face_begin;
     atomicAdd(&stats[3], 1);                       // submitted
 
     CudaVec4 v[3], cv[3];
@@ -876,6 +912,8 @@ private:
     int*   d_stats;           // [culled_back, culled_off, dropped, submitted]
     CudaMaterial* d_materials;   // one slot per mesh drawn this frame
     size_t mat_capacity;         // slots currently allocated in d_materials
+    MeshDraw* d_draws;           // the frame's queued meshes
+    size_t draw_capacity;
     int*   d_shadowbuf;          // depth from the light's point of view
 
     // SSAO. normals are bottom-up like the zbuffer; ao/ao_blur are one float
@@ -889,6 +927,10 @@ private:
     // staged host-side and uploaded in one memcpy per flush. slot 0 is always
     // the neutral pass-through material the host staging path points at.
     std::vector<CudaMaterial> h_materials;
+    // meshes queued since the last flush, with their running face total.
+    // drawMesh only appends; flush() launches setup once for all of them.
+    std::vector<MeshDraw> h_draws;
+    int h_draw_faces;
 
     // width/height are the RENDER dimensions, which are out_width/out_height
     // scaled by ss. Every buffer and kernel above works at render resolution;
@@ -923,6 +965,7 @@ public:
         : width(out_w * ss_factor), height(out_h * ss_factor),
           out_width(out_w), out_height(out_h), ss(ss_factor),
           d_resolve(NULL), d_bg_arr(NULL), d_bg_tex(0), has_bg(false),
+          d_draws(NULL), draw_capacity(0), h_draw_faces(0),
           initialized(false),
           stat_submitted(0), stat_culled_back(0), stat_culled_offscreen(0) {
         int w = width, h = height;
@@ -1029,6 +1072,7 @@ public:
             cudaFree(d_tri_count);
             cudaFree(d_stats);
             cudaFree(d_materials);
+            if (d_draws) cudaFree(d_draws);
             cudaFree(d_shadowbuf);
             cudaFree(d_normalbuf);
             cudaFree(d_ao);
@@ -1143,6 +1187,8 @@ public:
         zbuffer_fill_kernel<<<grid, block>>>(d_zbuffer, far_val.i, pixel_count);
 
         h_batch.clear();
+        h_draws.clear();
+        h_draw_faces = 0;
         stat_submitted = stat_culled_back = stat_culled_offscreen = 0;
         cudaMemset(d_tri_count, 0, sizeof(int));
         cudaMemset(d_stats, 0, 4 * sizeof(int));
@@ -1253,7 +1299,35 @@ public:
 
         cudaEventRecord(ev_start);
 
-        // mesh_setup_kernel appends straight into d_triangles, so the device
+        // one launch for every mesh queued since the last flush
+        if (!h_draws.empty()) {
+            if (h_draws.size() > draw_capacity) {
+                if (d_draws) cudaFree(d_draws);
+                draw_capacity = h_draws.size() + h_draws.size() / 2;
+                cudaError_t de = cudaMalloc(&d_draws,
+                                            draw_capacity * sizeof(MeshDraw));
+                if (de != cudaSuccess) {
+                    printf("CUDA draw table alloc failed (%zu slots): %s\n",
+                           draw_capacity, cudaGetErrorString(de));
+                    d_draws = NULL; draw_capacity = 0;
+                    h_draws.clear(); h_draw_faces = 0;
+                    h_batch.clear(); resetMaterials();
+                    return;
+                }
+            }
+            cudaMemcpy(d_draws, h_draws.data(),
+                       h_draws.size() * sizeof(MeshDraw), cudaMemcpyHostToDevice);
+
+            int block = 256;
+            int grid = (h_draw_faces + block - 1) / block;
+            mesh_setup_kernel<<<grid, block>>>(d_draws, (int)h_draws.size(),
+                                               h_draw_faces,
+                                               d_triangles, d_tri_count,
+                                               MAX_BATCH, width, height,
+                                               d_stats);
+        }
+
+        // the setup kernel appends straight into d_triangles, so the device
         // owns the count now. the host staging path (still used by the tests
         // and cudaRenderTriangle) appends after whatever the meshes wrote.
         int num_tris = 0;
@@ -1294,7 +1368,12 @@ public:
         cudaEventRecord(ev_upload);
 
         if (num_tris > MAX_BATCH) num_tris = MAX_BATCH;   // setup kernel overran
-        if (num_tris == 0) { timing_ready = false; resetMaterials(); return; }
+        if (num_tris == 0) {
+            timing_ready = false;
+            h_draws.clear(); h_draw_faces = 0;
+            resetMaterials();
+            return;
+        }
 
         // pass 1a: count (triangle, tile) pairs. nothing is written yet, so
         // there is no capacity to exceed.
@@ -1363,6 +1442,8 @@ public:
         // baked into those triangles die with them, so the table resets too
         // and the shadow pass does not eat the colour pass's slots.
         cudaMemset(d_tri_count, 0, sizeof(int));
+        h_draws.clear();
+        h_draw_faces = 0;
         resetMaterials();
 
         cudaError_t err = cudaGetLastError();
@@ -1560,19 +1641,22 @@ public:
         h_materials.push_back(m);
         int mat_id = (int)h_materials.size() - 1;
 
-        Mat4 mvp, clip, mit;
-        for (int i = 0; i < 16; i++) mvp.m[i] = mvp16[i];
-        for (int i = 0; i < 16; i++) clip.m[i] = clip16[i];
-        for (int i = 0; i < 16; i++) mit.m[i] = mit16[i];
+        MeshDraw dr;
+        dr.verts = dm.d_verts;
+        dr.faces = dm.d_faces;
+        dr.cnorms = dm.d_norms;
+        dr.cuvs = dm.d_uvs;
+        dr.nfaces = dm.nfaces;
+        dr.face_begin = h_draw_faces;
+        for (int i = 0; i < 16; i++) dr.mvp.m[i] = mvp16[i];
+        for (int i = 0; i < 16; i++) dr.clip.m[i] = clip16[i];
+        for (int i = 0; i < 16; i++) dr.mit.m[i] = mit16[i];
+        dr.mat_id = mat_id;
+        dr.color = CudaColor(r, g, b);
 
-        int block = 256;
-        int grid = (dm.nfaces + block - 1) / block;
-        mesh_setup_kernel<<<grid, block>>>(dm.d_verts, dm.d_faces, dm.nfaces,
-                                           dm.d_norms, dm.d_uvs,
-                                           mvp, clip, mit, mat_id,
-                                           CudaColor(r, g, b),
-                                           d_triangles, d_tri_count, MAX_BATCH,
-                                           width, height, d_stats);
+        // queued, not launched: flush() transforms the whole scene at once
+        h_draws.push_back(dr);
+        h_draw_faces += dm.nfaces;
     }
 
     void synchronize() {

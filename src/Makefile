@@ -81,6 +81,10 @@ test_ssaa: $(ENGOBJS)
 	  tests/test_ssaa.cpp $(ENGOBJS) $(LIBS) \
 	  -L/usr/local/cuda/lib64 -lcudart
 
+bench_meshes: $(ENGOBJS)
+	mkdir -p tests/bin
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -I. -o tests/bin/bench_meshes 	  tests/bench_meshes.cpp $(ENGOBJS) $(LIBS) 	  -L/usr/local/cuda/lib64 -lcudart
+
 test_background: $(ENGOBJS)
 	mkdir -p tests/bin
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -I. -o tests/bin/test_background 	  tests/test_background.cpp $(ENGOBJS) $(LIBS) 	  -L/usr/local/cuda/lib64 -lcudart

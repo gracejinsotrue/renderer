@@ -63,7 +63,9 @@ into it.
 
 `make tools` builds the benchmarking and inspection programs. These measure
 or render for eyeballing rather than asserting, so they are gitignored and
-the target skips whichever are absent.
+the target skips whichever are absent. `bench_meshes` is the exception: it
+needs SDL and the scene graph, so it has its own target and is tracked, being
+the measurement that justifies batching the setup launch.
 
 | program | what it does |
 |---|---|
@@ -72,6 +74,7 @@ the target skips whichever are absent.
 | `bench_cull` | what backface culling is worth, across three models |
 | `bench_tile` | tile size sweep |
 | `profile_frame` | per-stage frame breakdown (setup / bin / raster / DMA) |
+| `bench_meshes` | per-frame cost against mesh count, through the real Engine |
 | `render_png` | renders a model to TGA so the shading can be looked at |
 
 `render_png` takes: `model out [gpu|cpu] [texmask dns] [S|N shadows] [bias]
