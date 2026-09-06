@@ -6,14 +6,44 @@ a number that contradicted an assumption.
 
 ## Build environment
 
-Builds under WSL, not Windows natively. The Makefile's `/usr/include/SDL2` and
-`/usr/local/cuda/lib64` are Linux paths, and the Windows-side toolchain is a
-dead end: nvcc there wants MSVC `cl.exe`, and MinGW g++ is not a host compiler
-nvcc supports.
+Two builds now: `CMakeLists.txt` at the root, which works natively on Windows
+and Linux, and `src/Makefile`, which is the original WSL path and still works.
+
+    cmake --preset windows      # or: --preset linux
+    cmake --build build/windows
+    ctest --test-dir build/windows
+
+**Native Windows was never actually a dead end.** The note that used to sit
+here said the Windows toolchain was one, because nvcc wants MSVC `cl.exe` and
+MinGW g++ is not a host compiler nvcc supports. Both halves of that are true
+and the conclusion did not follow: what it rules out is *MinGW*, not Windows.
+With Visual Studio 2022 installed, nvcc has the `cl.exe` it was asking for.
+The port needed no change to `src/` at all -- all six `.cu` files and every
+`.cpp` compiled clean under MSVC 19.44 / CUDA 12.9 on the first attempt. The
+only source change anywhere was `setenv` in the test programs, which is POSIX
+and spelled `_putenv_s` in the MSVC CRT (`src/tests/compat.h`), plus
+`_USE_MATH_DEFINES` for `M_PI`, which CMake supplies.
+
+Worth knowing for the native build:
+
+- **Use Ninja, not the Visual Studio generator.** The VS generator needs the
+  CUDA MSBuild integration installed into VS itself, and here that copy was
+  incomplete: the `.props`/`.targets`/`.xml` were in
+  `MSBuild\Microsoft\VC\v170\BuildCustomizations` but
+  `Nvda.Build.CudaTasks.v12.9.dll` was not, and CMake reports that as the
+  unhelpful `No CUDA toolset found`. Ninja drives nvcc and `cl.exe` directly
+  and needs none of it. It does need the MSVC environment, so configure and
+  build from a Developer Command Prompt or after sourcing `vcvars64.bat`.
+- **SDL2 has to be built for MSVC.** The `C:\SDL2` copy here is the MinGW
+  devel package left over from that earlier attempt and will not link.
+  `vcpkg install sdl2:x64-windows`, then point `VCPKG_ROOT` at the vcpkg tree
+  so the preset finds the toolchain file.
 
 In WSL: CUDA 12.0 at `/usr/local/cuda` (nvcc not on PATH), SDL2 headers in
 `/usr/include/SDL2`. CUDA 12.0's nvcc rejects host gcc > 12 and the default here
 is 14, so the Makefile pins `-ccbin g++-11`. Plain `make` from inside WSL.
+The CMake build does not hardcode that pin -- it is a CUDA 12.0 constraint, and
+the native toolchain is 12.9.
 
 Model sizes, for reading the numbers below:
 
@@ -114,8 +144,72 @@ single-mesh scene gains nothing back from.
 
 ### CPU and GPU agreement
 
-Mean byte difference 0.17 with identical pixel coverage, on a textured model
-with shadows. `tests/test_shaded` is what holds this.
+`tests/test_shaded` at its defaults (600x600, textured, with shadows):
+
+    pixels_different      38499  (10.694%)
+    significant_pixels        2  (0.001%, >8 in any channel)
+    mean_abs_byte_diff   0.0614
+    max_byte_diff            51
+
+This section used to claim 0.17. That figure was stale -- it came from some
+earlier framing that was never re-measured -- and the number above is what the
+test actually prints.
+
+### The two toolchains agree exactly
+
+Running that same test from the MSVC build and the WSL gcc build gives
+identical output: same 38,499 differing pixels, same 2 significant, same
+0.0614, same max of 51. Not "close" -- the same numbers.
+
+That is worth more than it looks. The differential suite's whole job is to
+catch the GPU disagreeing with an independent CPU implementation, and if the
+host toolchain perturbed the CPU reference at all, every threshold in the suite
+would quietly mean something different on each platform. It does not, so a
+failure on one platform is a real failure and not a floating-point dialect.
+Checking this was cheap and the alternative was assuming it.
+
+The same holds for the pipeline stats: `profile_frame` reports
+`sub=136725 back=26778 off=80245 bin_entries=40589` on `rumi/body.obj` from
+both builds. Identical, not close.
+
+### Going native did not make the frame faster
+
+The reason for porting off WSL was the readback. The section below records a
+~1.8 GB/s device-to-host ceiling and predicts that the same transfer on native
+hardware "would be roughly an order of magnitude faster". Measured warm, back
+to back, same GPU, same source, `tests/bin/profile_frame` on `rumi/body.obj`
+at 800x800, three runs each:
+
+| stage | WSL2 | native Windows |
+|---|---|---|
+| raster kernel | 1.34-1.35 ms | 1.35-1.39 ms |
+| frame DMA back | 0.41-0.48 ms | 0.59-0.89 ms |
+| TOTAL | 2.19-2.33 ms | 3.05-3.12 ms |
+
+The raster kernel is identical, which is the expected result: same device
+code, same card. But the readback is *faster* under WSL, and the whole frame
+with it. The prediction was wrong, and wrong in the direction that flattered
+the plan, which is the direction nobody checks.
+
+Two caveats, both of which weaken these numbers rather than the conclusion.
+"frame DMA back" is derived, not measured -- `profile_frame` computes it as
+wall time minus the CUDA event times, so it carries synchronization overhead
+and is not a bandwidth figure. And this machine has large transient variance:
+the same WSL binary reported 23.20 ms for this model on a cold run and 2.33 ms
+warm, and one early native run reported 8186 ms with the GPU sitting at 0%
+utilization, which was never reproduced and is still unexplained. Nothing here
+should be published without a proper repeated measurement.
+
+So the readback argument for going native does not survive contact with the
+measurement. What does survive:
+
+- the project builds from a clone on a machine with no WSL, which is the
+  difference between a reviewer running it and not
+- `ncu` and `nsys` can get a real GPU timeline natively, instead of the
+  hand-rolled CUDA events being the only source of truth
+- CUDA/OpenGL interop becomes reachable at all, and interop *removes* the
+  copy rather than making it faster -- which is the only version of this
+  argument the measurement still supports
 
 ## Limits that are the environment, not the code
 
@@ -146,7 +240,15 @@ of magnitude of transfer size, so it is a ceiling rather than per-call overhead:
 Pinned host memory changes nothing (1.211 ms vs 1.207 ms for a frame), and
 staging through pinned memory is worse (1.376 ms). This is WSL2's GPU
 paravirtualization boundary; the same transfer on native hardware would be
-roughly an order of magnitude faster. The ~1.6 ms frame DMA that shows up as
+roughly an order of magnitude faster.
+
+**That last sentence was a guess and it was wrong.** It was never measured --
+there was no native build to measure it against at the time -- and when one
+existed the native readback came out *slower* than the WSL one, not an order
+of magnitude faster. See "Going native did not make the frame faster" above.
+The bandwidth table itself still stands; only the extrapolation off the end of
+it was wrong. Worth leaving both here: the table is a measurement and the
+sentence after it was an assumption wearing a measurement's clothes. The ~1.6 ms frame DMA that shows up as
 ~45% of a light frame is this, not a code defect.
 
 Profiling note: nsys cannot get a GPU timeline through WSL2 either. It traces
@@ -218,6 +320,18 @@ mapped normal legitimately points away.
 reference had the kernel's normal handling pasted into it, so the two agreed
 automatically and a real shading bug survived. A reference has to be derived
 independently or it is not a reference.
+
+**The CMake build silently targeted the wrong GPU.** `CMAKE_CUDA_ARCHITECTURES`
+was being defaulted with `if(NOT DEFINED ...)` placed *after* `project()`, and
+`project()` already defines it -- to a conservative 52. So the guard never
+fired and the first native build produced sm_52 cubin for an sm_86 card. There
+is no error and no visual difference: the driver JITs the embedded PTX and
+every frame renders correctly, just not on code generated for the hardware it
+is running on. The only symptom would have been performance numbers that were
+quietly wrong, which is the worst possible symptom on a project whose point is
+the measurements. It has to be set before `project()`. Same shape as the tile
+overflow: the failure mode was silence, and it showed up only because the
+configure summary prints the value.
 
 ## What was removed, and why
 

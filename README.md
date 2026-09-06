@@ -28,11 +28,40 @@ geometry every frame, are exactly the things that make a GPU one slow.
 GO TO:
 
 
+[how to build it](#BUILD)
+
 
 [technical features](#FEATURES)
 
 
 [some interesting rendered images](#IMAGES)
+
+
+# BUILD
+
+Needs a CUDA-capable GPU, the CUDA toolkit, and SDL2. There is no CPU
+fallback and no software path: without a GPU the engine exits rather than
+pretending.
+
+    cmake --preset windows          # or: --preset linux
+    cmake --build build/windows
+    ctest --test-dir build/windows  # 10 tests, see src/tests/README.md
+
+**Linux.** `sudo apt install libsdl2-dev`, then the commands above with
+`--preset linux`.
+
+**Windows.** Build from a Developer Command Prompt, or any shell where
+`vcvars64.bat` has been sourced, so nvcc can find MSVC's `cl.exe`. SDL2 has to
+be one built for MSVC -- `vcpkg install sdl2:x64-windows`, with `VCPKG_ROOT`
+pointing at the vcpkg tree. The presets use Ninja rather than the Visual Studio
+generator, which needs the CUDA MSBuild integration installed into VS itself.
+
+The build targets your own GPU's architecture by default
+(`-DCMAKE_CUDA_ARCHITECTURES=86` to pin it instead).
+
+`src/Makefile` still works and is still the WSL path; it predates the CMake
+build and is kept because the measurements in [NOTES.md](NOTES.md) were taken
+with it.
 
 
 
