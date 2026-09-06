@@ -182,6 +182,25 @@ than a pointer comparison, because the pointer is exactly what cannot be
 trusted. The general form: if freeing and reallocating can produce the same
 address, identity is not a pointer.
 
+**The backface cull sign was inverted.** It kept back faces and discarded
+front ones. From the front that leaves the inside of the far side of a closed
+mesh, which keeps a plausible silhouette while lighting it by normals that
+point away, so for a long time it read as bad shading rather than as a cull
+bug; from behind, the face shows through the back of the head. Neither
+differential test could see it, because both rasterizers shared the sign and
+agreed exactly on a wrong image. What settles it is that culling is only ever
+an optimization: for a closed mesh the render must be identical with it
+disabled. Against a no-cull reference the old sign differs by a mean of 11.28
+bytes per pixel and the corrected one by 0.00. The general form: when two
+implementations are checked only against each other, a convention they share
+is invisible; it needs a check against a version of the pipeline with the
+stage removed.
+
+**Five uninitialized members.** `cameraDistance`, `cameraRotationX/Y`,
+`cameraTarget` and `orbitMode` were never initialized, and `resetCamera()` is
+only reachable from a keypress, so the first orbit, pan or zoom of a session
+read uninitialized floats and an uninitialized bool.
+
 **Normals were being reoriented toward the camera.** Forcing `nz >= 0` flips the
 sign of `n.l` discontinuously wherever nz crosses zero, which shows up as
 hard-edged bands across a curved surface. Near a silhouette an interpolated or
