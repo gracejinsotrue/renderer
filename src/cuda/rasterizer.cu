@@ -72,6 +72,36 @@ static bool uploadTexture(const unsigned char* px, int w, int h, int bpp,
     return cudaCreateTextureObject(tex_out, &rd, &td, NULL) == cudaSuccess;
 }
 
+// Linear RGBA float, uploaded as-is. Separate from uploadTexture because that
+// one exists to match the CPU sampler on TGA data: it swizzles to BGRA,
+// normalizes to 0..1 and clamps in both axes, none of which an HDR
+// environment wants.
+static bool uploadFloatTexture(const float* rgba, int w, int h,
+                               cudaArray_t* arr_out, cudaTextureObject_t* tex_out)
+{
+    if (!rgba || w <= 0 || h <= 0) return false;
+    cudaChannelFormatDesc ch = cudaCreateChannelDesc<float4>();
+    if (cudaMallocArray(arr_out, &ch, w, h) != cudaSuccess) return false;
+    size_t pitch = (size_t)w * 4 * sizeof(float);
+    cudaMemcpy2DToArray(*arr_out, 0, 0, rgba, pitch, pitch, h,
+                        cudaMemcpyHostToDevice);
+
+    cudaResourceDesc rd; memset(&rd, 0, sizeof(rd));
+    rd.resType = cudaResourceTypeArray;
+    rd.res.array.array = *arr_out;
+
+    cudaTextureDesc td; memset(&td, 0, sizeof(td));
+    // u wraps because 0 and 1 are the same meridian; v clamps because the
+    // poles are ends, not a seam.
+    td.addressMode[0] = cudaAddressModeWrap;
+    td.addressMode[1] = cudaAddressModeClamp;
+    td.filterMode = cudaFilterModeLinear;
+    // not NormalizedFloat: these values are radiance and routinely exceed 1
+    td.readMode = cudaReadModeElementType;
+    td.normalizedCoords = 1;
+    return cudaCreateTextureObject(tex_out, &rd, &td, NULL) == cudaSuccess;
+}
+
 class CudaTriangleRasterizer {
 private:
     CudaTriangle* d_triangles;
@@ -129,6 +159,17 @@ private:
     cudaTextureObject_t d_bg_tex;
     bool has_bg;
 
+    // optional HDR environment, which takes clear()'s backdrop slot ahead of
+    // the flat background when both are loaded. Sampling it needs the camera,
+    // so env_inv_vp is refreshed by the engine every frame; it is stale by
+    // exactly one frame if the engine forgets, which shows up as a backdrop
+    // that lags the view rather than as anything harder to see.
+    cudaArray_t d_env_arr;
+    cudaTextureObject_t d_env_tex;
+    bool has_env;
+    Mat4 env_inv_vp;
+    float env_exposure;
+
     // per-stage GPU timing. nsys can't get a GPU timeline through WSL2 and
     // ncu needs a driver permission change, so the kernels time themselves.
     cudaEvent_t ev_start, ev_upload, ev_bin, ev_raster;
@@ -147,9 +188,14 @@ public:
         : width(out_w * ss_factor), height(out_h * ss_factor),
           out_width(out_w), out_height(out_h), ss(ss_factor),
           d_resolve(NULL), d_bg_arr(NULL), d_bg_tex(0), has_bg(false),
+          d_env_arr(NULL), d_env_tex(0), has_env(false), env_exposure(1.0f),
           d_draws(NULL), draw_capacity(0), h_draw_faces(0),
           initialized(false),
           stat_submitted(0), stat_culled_back(0), stat_culled_offscreen(0) {
+        // identity until the engine sets a real one, so an environment drawn
+        // before the first setEnvironmentView is wrong rather than undefined
+        for (int i = 0; i < 16; i++) env_inv_vp.m[i] = (i % 5 == 0) ? 1.f : 0.f;
+
         int w = width, h = height;
         tiles_x = (w + TILE_W - 1) / TILE_W;
         tiles_y = (h + TILE_H - 1) / TILE_H;
@@ -266,6 +312,7 @@ public:
             cudaFree(d_ssao_vp);
             if (d_resolve) cudaFree(d_resolve);
             clearBackground();
+            clearEnvironment();
             cudaEventDestroy(ev_start);
             cudaEventDestroy(ev_upload);
             cudaEventDestroy(ev_bin);
@@ -333,7 +380,10 @@ public:
     void clear() {
         if (!initialized) return;
 
-        if (has_bg) {
+        if (has_env) {
+            cudaLaunchEnvironment(d_framebuffer, d_env_tex, env_inv_vp,
+                                  env_exposure, width, height);
+        } else if (has_bg) {
             cudaLaunchBackground(d_framebuffer, d_bg_tex, width, height);
         } else {
             cudaMemset(d_framebuffer, 0, width * height * 3);
@@ -738,6 +788,29 @@ public:
         has_bg = false;
     }
 
+    bool setEnvironment(const float* rgba, int w, int h) {
+        if (!initialized) return false;
+        clearEnvironment();
+        has_env = uploadFloatTexture(rgba, w, h, &d_env_arr, &d_env_tex);
+        return has_env;
+    }
+
+    void clearEnvironment() {
+        if (d_env_tex) cudaDestroyTextureObject(d_env_tex);
+        if (d_env_arr) cudaFreeArray(d_env_arr);
+        d_env_tex = 0;
+        d_env_arr = NULL;
+        has_env = false;
+    }
+
+    // Both are per-frame view state, so they arrive together: exposure has to
+    // be re-sent after a resize anyway, since that builds a new rasterizer.
+    void setEnvironmentView(const float* inv16, float exposure) {
+        if (inv16)
+            for (int i = 0; i < 16; i++) env_inv_vp.m[i] = inv16[i];
+        env_exposure = exposure > 0.f ? exposure : 0.f;
+    }
+
     void setMeshTexture(int h, int slot, const unsigned char* px,
                         int w, int hgt, int bpp) {
         if (h < 0 || h >= (int)meshes().size() || slot < 0 || slot > 2) return;
@@ -931,6 +1004,15 @@ extern "C" {
     }
     void cudaClearBackground() {
         if (g_cuda_rasterizer) g_cuda_rasterizer->clearBackground();
+    }
+    void cudaSetEnvironment(const float* rgba, int w, int h) {
+        if (g_cuda_rasterizer) g_cuda_rasterizer->setEnvironment(rgba, w, h);
+    }
+    void cudaClearEnvironment() {
+        if (g_cuda_rasterizer) g_cuda_rasterizer->clearEnvironment();
+    }
+    void cudaSetEnvironmentView(const float* inv16, float exposure) {
+        if (g_cuda_rasterizer) g_cuda_rasterizer->setEnvironmentView(inv16, exposure);
     }
     int cudaLiveMeshCount() {
         return g_cuda_rasterizer ? g_cuda_rasterizer->liveMeshCount() : 0;

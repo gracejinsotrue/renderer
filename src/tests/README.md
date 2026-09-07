@@ -9,6 +9,7 @@ window, no SDL, no interaction. Each one asserts and exits non-zero on failure.
     make test_ssaa      # supersampling, same requirements
     make test_background # background compositing, same requirements
     make test_meshcache # device geometry cache lifetime, same requirements
+    make test_environment # HDR environment map, same requirements
 
 Run them from `src/` so the relative model paths resolve.
 
@@ -30,6 +31,7 @@ independent implementation to disagree with.
 | `test_ssaa` | does supersampling anti-alias the silhouette without moving, rescaling or blurring the image? |
 | `test_background` | does the background composite on the GPU, under the geometry, the right way up? |
 | `test_meshcache` | does the Model -> device mesh cache get dropped when Scene::clear() frees the Models? |
+| `test_environment` | does the HDR environment decode, and is it sampled along the view ray rather than pasted on? |
 
 `test_engine` runs headless via SDL's dummy video driver and steps `render()`
 directly instead of calling `run()`. It is the only test that covers the
@@ -56,6 +58,23 @@ that point away. What catches it is that culling is only ever an optimization,
 so for a closed mesh the render has to be identical with it disabled. Comparing
 against a no-cull render is the check; `capture_scene` is there to make that
 comparison easy.
+
+`test_environment` moves the camera to four known directions and demands the
+colour belonging to each, rather than checking that the frame changed or that
+some expected colour is present. Both of those pass on a wallpaper, which is
+the thing an environment map has to not be. It caught the bug it was written
+for on the first run: the view ray was built from the wrong end of the depth
+range, so it pointed back at the camera and every direction sampled the
+opposite side of the sphere. Getting both axes wrong at once is why a
+single-direction check would have been no use -- looking one way still
+produced a plausible colour, just the wrong one.
+
+Its .hdr files are written by the test rather than committed. A map small
+enough to commit is still a binary nobody can read, and generating it means the
+Radiance decoder is checked against known values: the same pixels are written
+twice, once flat and once run-length encoded, and the two have to decode
+bit-identically. The RLE path is the one real files use and the only one with
+enough logic to be wrong.
 
 `test_background` uses a two-band image rather than a flat colour. A flat
 background cannot tell a correct composite from a vertically flipped one,

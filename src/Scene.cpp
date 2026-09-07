@@ -40,7 +40,8 @@ void Camera::lookAt(Vec3f eye, Vec3f center, Vec3f up_vec)
 
 // scene implementation
 Scene::Scene() : selectedNode(nullptr), nodeCounter(0), background(nullptr),
-                 backgroundVersion(0), geometryVersion(0)
+                 backgroundVersion(0), environment(nullptr), environmentVersion(0),
+                 geometryVersion(0)
 {
     rootNode = std::make_unique<SceneNode>("Root", SceneNode::EMPTY);
 }
@@ -49,6 +50,7 @@ Scene::~Scene()
 {
     clear();
     clearBackground();
+    clearEnvironment();
 }
 
 SceneNode *Scene::loadModel(const std::string &objPath, const std::string &nodeName)
@@ -235,6 +237,32 @@ void Scene::clearBackground()
         background = nullptr;
         backgroundVersion++;
         std::cout << "Background cleared" << std::endl;
+    }
+}
+
+void Scene::loadEnvironment(const std::string &filename)
+{
+    clearEnvironment();
+    HDRImage *img = new HDRImage();
+    environmentVersion++;
+    if (load_hdr(filename, *img))
+    {
+        environment = img;
+    }
+    else
+    {
+        delete img;
+    }
+}
+
+void Scene::clearEnvironment()
+{
+    if (environment)
+    {
+        delete environment;
+        environment = nullptr;
+        environmentVersion++;
+        std::cout << "Environment cleared" << std::endl;
     }
 }
 

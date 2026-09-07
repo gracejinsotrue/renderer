@@ -39,6 +39,14 @@ extern "C"
     // composited under every frame by cudaClearBuffers, at render resolution
     void cudaSetBackground(const unsigned char *px, int w, int h, int bpp);
     void cudaClearBackground();
+    // equirectangular HDR, linear RGBA float. drawn by cudaClearBuffers in
+    // place of the background when both are set.
+    void cudaSetEnvironment(const float *rgba, int w, int h);
+    void cudaClearEnvironment();
+    // row-major inverse of Viewport*Projection*ModelView, at render
+    // resolution: what turns a pixel back into a world-space view ray. Both
+    // are per-frame, so a rasterizer rebuild does not strand them.
+    void cudaSetEnvironmentView(const float *inv16, float exposure);
     // screen space ambient occlusion over the finished device frame
     void cudaApplySSAO(const float *inv_vp16, const float *vp16,
                        float radius, float intensity, float bias, int debug);
@@ -87,6 +95,9 @@ private:
     long uploadedBackgroundVersion;
     void syncBackground();
 
+    long uploadedEnvironmentVersion;
+    void syncEnvironment();
+
     // Scene::geometryVersion as of the last time cudaMeshes was known good.
     long cachedGeometryVersion;
     void syncGeometry();
@@ -117,6 +128,11 @@ private:
 
     // shadow map comparison bias; see setShadowBias
     float shadowBias;
+
+    // Linear multiplier on the environment's radiance before the tone curve.
+    // Only the environment reads it: the shading path has no HDR values to
+    // expose yet.
+    float exposure;
 
     // Rendering dimensions
     int renderWidth, renderHeight;
@@ -152,6 +168,7 @@ public:
     SceneNode *loadModel(const std::string &filename, const std::string &nodeName = "");
     SceneNode *createEmptyNode(const std::string &nodeName = "");
     void loadBackground(const std::string &filename);
+    void loadEnvironment(const std::string &filename);
 
     // Object selection and manipulation
     void selectNextObject();
@@ -219,6 +236,9 @@ public:
     float getShadowBias() const { return shadowBias; }
     float getSSAOIntensity() const { return ssaoIntensity; }
     float getSSAORadius() const { return ssaoRadius; }
+
+    void setExposure(float v);
+    float getExposure() const { return exposure; }
 };
 
 #endif // __ENGINE_H__

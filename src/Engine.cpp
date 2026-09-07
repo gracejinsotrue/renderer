@@ -11,10 +11,11 @@ Engine::Engine(int winWidth, int winHeight, int renWidth, int renHeight)
     : window(nullptr), sdlRenderer(nullptr), frameTexture(nullptr),
       wantGLPresent(false),
       captureStaging(renWidth, renHeight, TGAImage::RGB),
-      uploadedBackgroundVersion(-1), cachedGeometryVersion(0),
+      uploadedBackgroundVersion(-1), uploadedEnvironmentVersion(-1),
+      cachedGeometryVersion(0),
       running(false), showStats(true), ssaaFactor(2),
       ssaoEnabled(true), ssaoRadius(0.18f), ssaoIntensity(0.85f), ssaoDebug(0),
-      shadowBias(2.0f),
+      shadowBias(2.0f), exposure(1.0f),
       windowWidth(winWidth), windowHeight(winHeight), renderWidth(renWidth), renderHeight(renHeight),
       mouseX(0), mouseY(0), mouseDeltaX(0), mouseDeltaY(0), lastMouseX(0), lastMouseY(0), mousePressed(false),
       cameraRotationX(0.0f), cameraRotationY(0.0f), orbitMode(true)
@@ -115,7 +116,10 @@ bool Engine::init()
     std::cout << "  K            - Present path: host copy or GL interop" << std::endl;
     std::cout << "  Arrow keys   - Move the light" << std::endl;
     std::cout << "  P            - Capture frame to output.tga" << std::endl;
-    std::cout << "  B / C        - Load / clear background image" << std::endl;
+    std::cout << "  B            - Load background.tga" << std::endl;
+    std::cout << "  V            - Load environment.hdr" << std::endl;
+    std::cout << "  C            - Clear the backdrop" << std::endl;
+    std::cout << "  [ / ]        - Environment exposure" << std::endl;
     std::cout << "  ESC          - Exit" << std::endl;
 
     cuda_available = initCudaRasterizerSS(renderWidth, renderHeight, ssaaFactor);
@@ -326,6 +330,16 @@ SceneNode *Engine::createEmptyNode(const std::string &nodeName)
 void Engine::loadBackground(const std::string &filename)
 {
     scene.loadBackground(filename);
+}
+
+void Engine::loadEnvironment(const std::string &filename)
+{
+    scene.loadEnvironment(filename);
+}
+
+void Engine::setExposure(float v)
+{
+    exposure = v < 0.01f ? 0.01f : (v > 64.f ? 64.f : v);
 }
 
 // OBJECT SELECTION MODELS
@@ -543,7 +557,21 @@ void Engine::handleEvents()
                 break;
             case SDLK_c:
                 scene.clearBackground();
-                std::cout << "Background cleared!" << std::endl;
+                scene.clearEnvironment();
+                break;
+
+            case SDLK_v:
+                loadEnvironment("environment.hdr");
+                break;
+
+            case SDLK_LEFTBRACKET:
+                setExposure(exposure / 1.25f);
+                std::cout << "Exposure: " << exposure << std::endl;
+                break;
+
+            case SDLK_RIGHTBRACKET:
+                setExposure(exposure * 1.25f);
+                std::cout << "Exposure: " << exposure << std::endl;
                 break;
             case SDLK_g:
                 toggleCameraMode();
@@ -868,7 +896,32 @@ void Engine::renderScene()
     scene.getVisibleMeshNodes(visibleMeshes);
 
     syncBackground();
+    syncEnvironment();
     syncGeometry();
+
+    // the device buffers are ssaaFactor times larger in each axis, so the
+    // viewport has to map to that, not to the display size. everything
+    // downstream (shadow map, SSAO, resolve) follows from this.
+    const int rw = renderWidth * ssaaFactor;
+    const int rh = renderHeight * ssaaFactor;
+
+    // Set up camera. Ahead of the clear, because the clear is what draws the
+    // environment and the environment is sampled along the view ray.
+    lookat(scene.camera.position, scene.camera.target, scene.camera.up);
+    viewport(rw / 8, rh / 8, rw * 3 / 4, rh * 3 / 4);
+    projection(scene.camera.projectionCoeff());
+
+    // Store original ModelView
+    Matrix originalModelView = ModelView;
+
+    {
+        Matrix invCam = (Viewport * Projection * ModelView).invert();
+        float inv16[16];
+        for (int r = 0; r < 4; r++)
+            for (int c = 0; c < 4; c++)
+                inv16[r * 4 + c] = invCam[r][c];
+        cudaSetEnvironmentView(inv16, exposure);
+    }
 
     // before the early return: present() blits whatever is in device memory,
     // so an empty scene has to clear it or the last drawn frame persists.
@@ -878,21 +931,6 @@ void Engine::renderScene()
     {
         return;
     }
-
-    // Set up camera
-    lookat(scene.camera.position, scene.camera.target, scene.camera.up);
-    viewport(renderWidth / 8, renderHeight / 8, renderWidth * 3 / 4, renderHeight * 3 / 4);
-    projection(scene.camera.projectionCoeff());
-
-    // Store original ModelView
-    Matrix originalModelView = ModelView;
-
-
-    // the device buffers are ssaaFactor times larger in each axis, so the
-    // viewport has to map to that, not to the display size. everything
-    // downstream (shadow map, SSAO, resolve) follows from this.
-    const int rw = renderWidth * ssaaFactor;
-    const int rh = renderHeight * ssaaFactor;
 
     // PASS 1: depth from the light's point of view, orthographic
     lookat(scene.light.direction, Vec3f(0, 0, 0), scene.camera.up);
@@ -1196,6 +1234,21 @@ void Engine::syncBackground()
     uploadedBackgroundVersion = (long)scene.backgroundVersion;
 }
 
+void Engine::syncEnvironment()
+{
+    if ((long)scene.environmentVersion == uploadedEnvironmentVersion)
+        return;
+
+    if (scene.environment && scene.environment->valid())
+        cudaSetEnvironment(scene.environment->pixels.data(),
+                           scene.environment->width,
+                           scene.environment->height);
+    else
+        cudaClearEnvironment();
+
+    uploadedEnvironmentVersion = (long)scene.environmentVersion;
+}
+
 int Engine::getCudaMesh(Model *model)
 {
     if (!model || !cuda_available)
@@ -1357,6 +1410,7 @@ void Engine::setSSAA(int factor)
     ssaaFactor = factor;
     // the new rasterizer owns none of the old one's textures
     uploadedBackgroundVersion = -1;
+    uploadedEnvironmentVersion = -1;
     if (!initCudaRasterizerSS(renderWidth, renderHeight, ssaaFactor))
     {
         std::cout << "SSAA " << ssaaFactor << "x failed to allocate, falling back to 1x"

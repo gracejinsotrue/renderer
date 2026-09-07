@@ -8,6 +8,7 @@
 #include "SceneNode.h"
 #include "model.h"
 #include "tgaimage.h"
+#include "hdri.h"
 
 class Camera
 {
@@ -68,6 +69,10 @@ public:
     // bumped on every load and clear. a fresh TGAImage can reuse the address
     // of the one just freed, so consumers cannot detect a change by pointer.
     unsigned backgroundVersion;
+    // An equirectangular HDR, which the renderer draws in place of the
+    // background rather than alongside it. Versioned for the same reason.
+    HDRImage *environment;
+    unsigned environmentVersion;
     // bumped whenever a Model is destroyed, which only clear() does. anything
     // caching by Model* has to drop that cache: a newly loaded Model can land
     // on the address of one just freed.
@@ -101,6 +106,9 @@ public:
     // for background ( i forget if it is flipped 180 right now)
     void loadBackground(const std::string &filename);
     void clearBackground();
+
+    void loadEnvironment(const std::string &filename);
+    void clearEnvironment();
 
     // utility
     void printSceneHierarchy() const;

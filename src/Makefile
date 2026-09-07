@@ -11,7 +11,7 @@ INCLUDES = -I/usr/include/SDL2
 LIBS = -lSDL2 -lSDL2main -lm -lGL
 
 # source files
-SOURCES = main.cpp Engine.cpp GLPresenter.cpp model.cpp transform.cpp tgaimage.cpp geometry.cpp Scene.cpp SceneNode.cpp
+SOURCES = main.cpp Engine.cpp GLPresenter.cpp model.cpp transform.cpp tgaimage.cpp geometry.cpp hdri.cpp Scene.cpp SceneNode.cpp
 OBJECTS = $(SOURCES:.cpp=.o)
 
 # the GPU pipeline, one file per stage. rasterizer.cu owns the device
@@ -50,7 +50,7 @@ TESTS = test_cull test_blit test_mesh test_shaded test_frustum
 # Local benchmarking and inspection tools. Not part of the regression
 # suite and not tracked in git, so `tools` skips any that are absent.
 TOOLS = test_wind bench bench_cull bench_tile profile_frame render_png
-TESTOBJS = model.o tgaimage.o geometry.o transform.o $(CUDA_OBJECTS) \
+TESTOBJS = model.o tgaimage.o geometry.o transform.o hdri.o $(CUDA_OBJECTS) \
            Scene.o SceneNode.o
 # The CPU reference rasterizer the differential tests compare against. It is
 # test-only: compiled into the test binaries, never into the engine.
@@ -74,7 +74,7 @@ tools: $(TESTOBJS)
 
 # Headless end-to-end test of the real Engine (needs SDL2 + the scene graph).
 ENGOBJS = Engine.o GLPresenter.o Scene.o SceneNode.o model.o transform.o tgaimage.o \
-          geometry.o $(CUDA_OBJECTS)
+          geometry.o hdri.o $(CUDA_OBJECTS)
 
 test_ssao: $(ENGOBJS)
 	mkdir -p tests/bin
@@ -103,6 +103,10 @@ test_meshcache: $(ENGOBJS)
 test_background: $(ENGOBJS)
 	mkdir -p tests/bin
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -I. -o tests/bin/test_background 	  tests/test_background.cpp $(ENGOBJS) $(LIBS) 	  -L/usr/local/cuda/lib64 -lcudart
+
+test_environment: $(ENGOBJS)
+	mkdir -p tests/bin
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -I. -Itests -o tests/bin/test_environment tests/test_environment.cpp $(ENGOBJS) $(LIBS) -L/usr/local/cuda/lib64 -lcudart
 
 test_engine: $(ENGOBJS)
 	mkdir -p tests/bin

@@ -68,3 +68,9 @@ void cudaLaunchDownsample(const unsigned char* src, unsigned char* dst,
                           int out_w, int out_h, int ss);
 void cudaLaunchBackground(unsigned char* framebuffer, cudaTextureObject_t bg,
                           int width, int height);
+
+// resolve.cu: the equirectangular environment, in place of the background.
+// inv_vp is the row-major inverse of Viewport*Projection*ModelView for this
+// frame, which is what turns a pixel back into a world-space view ray.
+void cudaLaunchEnvironment(unsigned char* framebuffer, cudaTextureObject_t env,
+                           Mat4 inv_vp, float exposure, int width, int height);

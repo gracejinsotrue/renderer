@@ -131,6 +131,7 @@ add_library(render_core STATIC
   src/model.cpp
   src/transform.cpp
   src/tgaimage.cpp
+  src/hdri.cpp
   src/Scene.cpp
   src/SceneNode.cpp
 
@@ -212,7 +213,8 @@ if(BUILD_TESTING_RENDERER)
   set(CORE_TESTS test_cull test_blit test_mesh test_shaded test_frustum)
 
   # End-to-end tests that need the real Engine, and therefore SDL2.
-  set(ENGINE_TESTS test_engine test_ssao test_ssaa test_background test_meshcache)
+  set(ENGINE_TESTS test_engine test_ssao test_ssaa test_background test_meshcache
+                   test_environment)
 
   # Models from assets/, as the tests see them from src/.
   set(ASSET_BUNNY  ../assets/bunny/bunny.obj)
@@ -226,6 +228,7 @@ if(BUILD_TESTING_RENDERER)
   set(MODEL_test_engine     ${ASSET_BUNNY})
   set(MODEL_test_ssaa       ${ASSET_BUNNY})
   set(MODEL_test_background ${ASSET_BUNNY})
+  set(MODEL_test_environment ${ASSET_BUNNY})
   # needs two distinct models: the cache it checks is keyed by Model*
   set(MODEL_test_meshcache  ${ASSET_BUNNY} ${ASSET_GLASS})
 
