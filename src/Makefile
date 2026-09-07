@@ -117,10 +117,6 @@ test_meshcache: $(ENGOBJS)
 	mkdir -p tests/bin
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -I. -o tests/bin/test_meshcache 	  tests/test_meshcache.cpp $(ENGOBJS) $(LIBS) 	  -L/usr/local/cuda/lib64 -lcudart
 
-test_background: $(ENGOBJS)
-	mkdir -p tests/bin
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -I. -o tests/bin/test_background 	  tests/test_background.cpp $(ENGOBJS) $(LIBS) 	  -L/usr/local/cuda/lib64 -lcudart
-
 test_environment: $(ENGOBJS)
 	mkdir -p tests/bin
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -I. -Itests -o tests/bin/test_environment tests/test_environment.cpp $(ENGOBJS) $(LIBS) -L/usr/local/cuda/lib64 -lcudart
@@ -159,7 +155,7 @@ setup:
 capture-rotation: $(TARGET)
 	./$(TARGET) --capture-sequence rotation 360 10.0
 
-.PHONY: all tests test_engine test_ssao test_ssaa test_background test_meshcache clean install-deps install-deps-mac run debug setup capture-rotation
+.PHONY: all tests test_engine test_ssao test_ssaa test_meshcache clean install-deps install-deps-mac run debug setup capture-rotation
 
 # header dependencies come from -MMD -MP via $(DEPS); there is no hand-written
 # list to keep in sync.

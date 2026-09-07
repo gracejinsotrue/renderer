@@ -53,27 +53,6 @@ void clear_colour_kernel(float4* framebuffer, int count)
     if (i < count) framebuffer[i] = make_float4(0.f, 0.f, 0.f, 1.f);
 }
 
-// Stretches the background image over the whole render target, under the
-// geometry: clear() runs this in place of the framebuffer memset.
-__global__
-void background_kernel(float4* framebuffer, cudaTextureObject_t bg,
-                       int width, int height)
-{
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
-    if (x >= width || y >= height) return;
-
-    float u = (x + 0.5f) / (float)width;
-    float v = (y + 0.5f) / (float)height;
-    float4 c = tex2D<float4>(bg, u, v);
-
-    // Taken as linear, though a TGA off disk is almost certainly sRGB. Model
-    // textures are read the same way, so decoding here alone would put the
-    // backdrop on a different footing from the geometry in front of it. Both
-    // want doing together, with the material model.
-    framebuffer[(size_t)y * width + x] = make_float4(c.z, c.y, c.x, 1.f);
-}
-
 __device__ inline
 CudaVec3 unproject(const Mat4& inv, float x, float y, float z)
 {
@@ -85,9 +64,8 @@ CudaVec3 unproject(const Mat4& inv, float x, float y, float z)
     return CudaVec3(ox * s, oy * s, oz * s);
 }
 
-// The environment as the frame's backdrop. Unlike background_kernel this
-// tracks the camera: each pixel is turned back into a world-space ray and the
-// map is sampled along it, so the backdrop moves when the view does.
+// The frame's backdrop. Each pixel is turned back into a world-space ray and
+// the map is sampled along it, so the backdrop moves when the view does.
 //
 // Two unprojections rather than a stored camera position: the weak-perspective
 // Projection here is not a standard frustum, so recovering the eye point from
@@ -118,10 +96,10 @@ void environment_kernel(float4* framebuffer, cudaTextureObject_t env,
     float u, v;
     equirect_uv(dx, dy, dz, &u, &v);
 
-    // .x=R here, where the LDR background texture is BGRA and reads .z=R:
-    // this one is uploaded straight from float RGBA rather than from a TGA.
-    // Written as the radiance it is, with no exposure and no curve; the tone
-    // map applies both, once, to the whole frame.
+    // .x=R: uploaded straight from float RGBA, unlike the model textures,
+    // which come off a TGA as BGRA and read .z=R. Written as the radiance it
+    // is, with no exposure and no curve; the tone map applies both, once, to
+    // the whole frame.
     float4 c = tex2D<float4>(env, u, v);
     framebuffer[(size_t)y * width + x] = make_float4(c.x, c.y, c.z, 1.f);
 }
@@ -188,14 +166,6 @@ void cudaLaunchDownsample(const float4* src, float4* dst,
     dim3 block(16, 16);
     dim3 grid((out_w + 15) / 16, (out_h + 15) / 16);
     downsample_kernel<<<grid, block>>>(src, dst, out_w, out_h, ss);
-}
-
-void cudaLaunchBackground(float4* framebuffer, cudaTextureObject_t bg,
-                          int width, int height)
-{
-    dim3 block(16, 16);
-    dim3 grid((width + 15) / 16, (height + 15) / 16);
-    background_kernel<<<grid, block>>>(framebuffer, bg, width, height);
 }
 
 void cudaLaunchEnvironment(float4* framebuffer, cudaTextureObject_t env,

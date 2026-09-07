@@ -45,9 +45,7 @@ public:
 private:
     void buildFrameStats(Engine &engine);
     void buildDisplay(Engine &engine);
-    void buildEnvironment(Engine &engine);
     void buildLighting(Engine &engine);
-    void buildOcclusion(Engine &engine);
     void buildScene(Engine &engine);
 
     bool active;
@@ -57,7 +55,6 @@ private:
 
     // Text fields need somewhere to live between frames.
     char env_path[256];
-    char bg_path[256];
     char model_path[256];
 
     // Smoothed for readability: the raw per-frame numbers flicker too fast to

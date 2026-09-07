@@ -1,9 +1,9 @@
 // Is the HDR environment sampled along the view ray, and does the Radiance
 // decoder agree with itself across both scanline encodings?
 //
-// The trap here is the same one test_background documents, one axis further
-// out. "The backdrop changed" is satisfied by any wallpaper, and so is "the
-// backdrop is green": what separates an environment from a flat image is that
+// The trap is that a weak assertion passes on a wrong image. "The backdrop
+// changed" is satisfied by any wallpaper, and so is "the backdrop is green":
+// what separates an environment from a flat image is that
 // turning the camera around has to change which part of the map you are
 // looking at. So the checks below move the camera to four known directions and
 // demand the colour that belongs to each, rather than asserting anything about

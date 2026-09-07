@@ -29,7 +29,6 @@ UI::UI()
       raster_ms_smooth(0.f)
 {
     snprintf(env_path, sizeof(env_path), "environment.hdr");
-    snprintf(bg_path, sizeof(bg_path), "background.tga");
     snprintf(model_path, sizeof(model_path), "assets/bunny/bunny.obj");
 }
 
@@ -178,25 +177,15 @@ void UI::buildDisplay(Engine &engine)
     if (ImGui::Button("Capture frame")) engine.captureFrame("output.tga");
     ImGui::SameLine();
     if (ImGui::Button("Reset camera")) engine.resetCamera();
-    ImGui::SameLine();
-    if (ImGui::Button("Present path")) engine.togglePresentMode();
 }
 
-void UI::buildEnvironment(Engine &engine)
+void UI::buildLighting(Engine &engine)
 {
     ImGui::InputText("##envpath", env_path, sizeof(env_path));
     ImGui::SameLine();
     if (ImGui::Button("Load .hdr")) engine.loadEnvironment(env_path);
-
-    ImGui::InputText("##bgpath", bg_path, sizeof(bg_path));
     ImGui::SameLine();
-    if (ImGui::Button("Load .tga")) engine.loadBackground(bg_path);
-
-    if (ImGui::Button("Clear backdrop"))
-    {
-        engine.getScene().clearEnvironment();
-        engine.getScene().clearBackground();
-    }
+    if (ImGui::Button("Clear")) engine.getScene().clearEnvironment();
 
     bool has_env = engine.getScene().environment != nullptr;
     ImGui::TextDisabled(has_env ? "environment loaded (lights the scene)"
@@ -208,10 +197,9 @@ void UI::buildEnvironment(Engine &engine)
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("How much of the environment's irradiance reaches\n"
                           "the shading. No effect without one loaded.");
-}
 
-void UI::buildLighting(Engine &engine)
-{
+    ImGui::SeparatorText("Directional light");
+
     Light &light = engine.getScene().light;
 
     // Direction as a unit vector, renormalised after any edit: the shading
@@ -231,23 +219,15 @@ void UI::buildLighting(Engine &engine)
     float col[3] = {light.color.x, light.color.y, light.color.z};
     if (ImGui::ColorEdit3("Colour", col))
         light.color = Vec3f(col[0], col[1], col[2]);
-}
 
-void UI::buildOcclusion(Engine &engine)
-{
+    ImGui::SeparatorText("Ambient occlusion");
+
     bool on = engine.isSSAOEnabled();
     if (ImGui::Checkbox("Enabled", &on)) engine.toggleSSAO();
 
-    float intensity = engine.getSSAOIntensity();
-    if (ImGui::SliderFloat("Strength", &intensity, 0.f, 2.f, "%.2f"))
-        engine.setSSAOIntensity(intensity);
-
-    float radius = engine.getSSAORadius();
-    if (ImGui::SliderFloat("Radius", &radius, 0.01f, 1.f, "%.3f"))
-        engine.setSSAORadius(radius);
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("World units, so it scales with the scene rather\n"
-                          "than with the render target.");
+    float ao = engine.getSSAOIntensity();
+    if (ImGui::SliderFloat("Strength", &ao, 0.f, 2.f, "%.2f"))
+        engine.setSSAOIntensity(ao);
 
     const char *views[] = {"Shaded", "Occlusion term", "Eye-space normals",
                            "Depth"};
@@ -290,9 +270,6 @@ void UI::buildScene(Engine &engine)
 
     ImGui::SeparatorText(selected->name.c_str());
 
-    bool visible = selected->isVisible();
-    if (ImGui::Checkbox("Visible", &visible)) selected->setVisible(visible);
-
     // Local, not world: this is what the node owns. Its parent's transform is
     // composed on top by Scene::updateAllTransforms.
     Transform &t = selected->localTransform;
@@ -330,12 +307,8 @@ void UI::build(Engine &engine)
             buildFrameStats(engine);
         if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen))
             buildDisplay(engine);
-        if (ImGui::CollapsingHeader("Environment", ImGuiTreeNodeFlags_DefaultOpen))
-            buildEnvironment(engine);
-        if (ImGui::CollapsingHeader("Light"))
+        if (ImGui::CollapsingHeader("Lighting", ImGuiTreeNodeFlags_DefaultOpen))
             buildLighting(engine);
-        if (ImGui::CollapsingHeader("Ambient occlusion"))
-            buildOcclusion(engine);
         if (ImGui::CollapsingHeader("Scene"))
             buildScene(engine);
     }

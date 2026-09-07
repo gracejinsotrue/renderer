@@ -53,11 +53,8 @@ extern "C"
     // the two paths on a scene with overdraw
     int cudaGetShadeCount();
     void cudaSetToneMapping(int enabled);
-    // composited under every frame by cudaClearBuffers, at render resolution
-    void cudaSetBackground(const unsigned char *px, int w, int h, int bpp);
-    void cudaClearBackground();
-    // equirectangular HDR, linear RGBA float. drawn by cudaClearBuffers in
-    // place of the background when both are set.
+    // equirectangular HDR, linear RGBA float. drawn by cudaClearBuffers as the
+    // frame's backdrop, at render resolution.
     void cudaSetEnvironment(const float *rgba, int w, int h);
     void cudaClearEnvironment();
     // row-major inverse of Viewport*Projection*ModelView, at render
@@ -124,11 +121,8 @@ private:
     std::unordered_map<Model *, int> cudaMeshes;
     int getCudaMesh(Model *model);
 
-    // Scene::backgroundVersion as of the last upload. -1 forces one, which is
+    // Scene::environmentVersion as of the last upload. -1 forces one, which is
     // how a rasterizer resize gets its textures back.
-    long uploadedBackgroundVersion;
-    void syncBackground();
-
     long uploadedEnvironmentVersion;
     void syncEnvironment();
 
@@ -208,7 +202,6 @@ public:
     Scene &getScene() { return scene; }
     SceneNode *loadModel(const std::string &filename, const std::string &nodeName = "");
     SceneNode *createEmptyNode(const std::string &nodeName = "");
-    void loadBackground(const std::string &filename);
     void loadEnvironment(const std::string &filename);
 
     // Object selection and manipulation

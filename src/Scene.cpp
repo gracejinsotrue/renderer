@@ -39,9 +39,8 @@ void Camera::lookAt(Vec3f eye, Vec3f center, Vec3f up_vec)
 }
 
 // scene implementation
-Scene::Scene() : selectedNode(nullptr), nodeCounter(0), background(nullptr),
-                 backgroundVersion(0), environment(nullptr), environmentVersion(0),
-                 geometryVersion(0)
+Scene::Scene() : selectedNode(nullptr), nodeCounter(0), environment(nullptr),
+                 environmentVersion(0), geometryVersion(0)
 {
     rootNode = std::make_unique<SceneNode>("Root", SceneNode::EMPTY);
 }
@@ -49,7 +48,6 @@ Scene::Scene() : selectedNode(nullptr), nodeCounter(0), background(nullptr),
 Scene::~Scene()
 {
     clear();
-    clearBackground();
     clearEnvironment();
 }
 
@@ -210,34 +208,6 @@ void Scene::getVisibleMeshNodes(std::vector<SceneNode *> &meshNodes)
     };
 
     collectVisible(rootNode.get());
-}
-
-void Scene::loadBackground(const std::string &filename)
-{
-    clearBackground();
-    background = new TGAImage();
-    backgroundVersion++;
-    if (background->read_tga_file(filename.c_str()))
-    {
-        std::cout << "Loaded background: " << filename << std::endl;
-    }
-    else
-    {
-        delete background;
-        background = nullptr;
-        std::cerr << "Failed to load background: " << filename << std::endl;
-    }
-}
-
-void Scene::clearBackground()
-{
-    if (background)
-    {
-        delete background;
-        background = nullptr;
-        backgroundVersion++;
-        std::cout << "Background cleared" << std::endl;
-    }
 }
 
 void Scene::loadEnvironment(const std::string &filename)

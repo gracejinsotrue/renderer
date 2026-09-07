@@ -168,17 +168,11 @@ private:
     bool tone_passthrough;
     int tiles_x, tiles_y, num_tiles;
 
-    // optional background image, composited by clear() instead of a memset.
-    // it does not survive a resize; the engine re-uploads it.
-    cudaArray_t d_bg_arr;
-    cudaTextureObject_t d_bg_tex;
-    bool has_bg;
-
-    // optional HDR environment, which takes clear()'s backdrop slot ahead of
-    // the flat background when both are loaded. Sampling it needs the camera,
-    // so env_inv_vp is refreshed by the engine every frame; it is stale by
-    // exactly one frame if the engine forgets, which shows up as a backdrop
-    // that lags the view rather than as anything harder to see.
+    // optional HDR environment, drawn by clear() as the frame's backdrop. It
+    // does not survive a resize; the engine re-uploads it. Sampling it needs
+    // the camera, so env_inv_vp is refreshed by the engine every frame; it is
+    // stale by exactly one frame if the engine forgets, which shows up as a
+    // backdrop that lags the view rather than as anything harder to see.
     cudaArray_t d_env_arr;
     cudaTextureObject_t d_env_tex;
     bool has_env;
@@ -211,7 +205,6 @@ public:
           out_width(out_w), out_height(out_h), ss(ss_factor),
           d_hdr_resolved(NULL), d_ldr(NULL), tone_exposure(1.0f),
           tone_enabled(true), tone_passthrough(false),
-          d_bg_arr(NULL), d_bg_tex(0), has_bg(false),
           d_env_arr(NULL), d_env_tex(0), has_env(false),
           d_irr_arr(NULL), d_irr_tex(0), has_irr(false), ibl_intensity(1.0f),
           d_draws(NULL), draw_capacity(0), h_draw_faces(0),
@@ -344,7 +337,6 @@ public:
             cudaFree(d_ssao_inv_vp);
             cudaFree(d_ssao_vp);
             if (d_hdr_resolved) cudaFree(d_hdr_resolved);
-            clearBackground();
             clearEnvironment();
             cudaEventDestroy(ev_start);
             cudaEventDestroy(ev_upload);
@@ -419,8 +411,6 @@ public:
 
         if (has_env) {
             cudaLaunchEnvironment(d_hdr, d_env_tex, env_inv_vp, width, height);
-        } else if (has_bg) {
-            cudaLaunchBackground(d_hdr, d_bg_tex, width, height);
         } else {
             // not a memset: black is four floats, and only three of them are
             // zero. alpha stays 1 so the buffer is always a valid colour.
@@ -824,21 +814,6 @@ public:
         dm.alive = false;
     }
 
-    bool setBackground(const unsigned char* px, int w, int h, int bpp) {
-        if (!initialized) return false;
-        clearBackground();
-        has_bg = uploadTexture(px, w, h, bpp, &d_bg_arr, &d_bg_tex);
-        return has_bg;
-    }
-
-    void clearBackground() {
-        if (d_bg_tex) cudaDestroyTextureObject(d_bg_tex);
-        if (d_bg_arr) cudaFreeArray(d_bg_arr);
-        d_bg_tex = 0;
-        d_bg_arr = NULL;
-        has_bg = false;
-    }
-
     bool setEnvironment(const float* rgba, int w, int h) {
         if (!initialized) return false;
         clearEnvironment();
@@ -1095,13 +1070,6 @@ extern "C" {
                             int w, int h, int bpp) {
         if (g_cuda_rasterizer)
             g_cuda_rasterizer->setMeshTexture(handle, slot, px, w, h, bpp);
-    }
-    // background image, composited under every frame by cudaClearBuffers
-    void cudaSetBackground(const unsigned char* px, int w, int h, int bpp) {
-        if (g_cuda_rasterizer) g_cuda_rasterizer->setBackground(px, w, h, bpp);
-    }
-    void cudaClearBackground() {
-        if (g_cuda_rasterizer) g_cuda_rasterizer->clearBackground();
     }
     void cudaSetEnvironment(const float* rgba, int w, int h) {
         if (g_cuda_rasterizer) g_cuda_rasterizer->setEnvironment(rgba, w, h);

@@ -63,16 +63,14 @@ void cudaLaunchSSAO(const int* zbuffer, const float* normalbuf,
                     float radius, float bias, float intensity,
                     int ssao_debug, int width, int height);
 
-// resolve.cu: supersample resolve and background composite. Everything up to
+// resolve.cu: supersample resolve and tone map. Everything up to
 // the tone map works in the linear float target; only cudaLaunchToneMap
 // produces the 8-bit frame the presenter and the capture path read.
 void cudaLaunchClearColour(float4* framebuffer, int count);
 void cudaLaunchDownsample(const float4* src, float4* dst,
                           int out_w, int out_h, int ss);
-void cudaLaunchBackground(float4* framebuffer, cudaTextureObject_t bg,
-                          int width, int height);
 
-// resolve.cu: the equirectangular environment, in place of the background.
+// resolve.cu: the equirectangular environment, drawn as the frame's backdrop.
 // inv_vp is the row-major inverse of Viewport*Projection*ModelView for this
 // frame, which is what turns a pixel back into a world-space view ray.
 void cudaLaunchEnvironment(float4* framebuffer, cudaTextureObject_t env,

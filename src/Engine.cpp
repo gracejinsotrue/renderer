@@ -12,7 +12,7 @@ Engine::Engine(int winWidth, int winHeight, int renWidth, int renHeight)
     : window(nullptr), sdlRenderer(nullptr), frameTexture(nullptr),
       wantGLPresent(false), ui(nullptr), uiWanted(false),
       captureStaging(renWidth, renHeight, TGAImage::RGB),
-      uploadedBackgroundVersion(-1), uploadedEnvironmentVersion(-1),
+      uploadedEnvironmentVersion(-1),
       cachedGeometryVersion(0),
       running(false), showStats(true), ssaaFactor(2),
       ssaoEnabled(true), ssaoRadius(0.18f), ssaoIntensity(0.85f), ssaoDebug(0),
@@ -117,9 +117,8 @@ bool Engine::init()
     std::cout << "  K            - Present path: host copy or GL interop" << std::endl;
     std::cout << "  Arrow keys   - Move the light" << std::endl;
     std::cout << "  P            - Capture frame to output.tga" << std::endl;
-    std::cout << "  B            - Load background.tga" << std::endl;
     std::cout << "  V            - Load environment.hdr" << std::endl;
-    std::cout << "  C            - Clear the backdrop" << std::endl;
+    std::cout << "  C            - Clear the environment" << std::endl;
     std::cout << "  [ / ]        - Exposure" << std::endl;
     std::cout << "  ESC          - Exit" << std::endl;
 
@@ -329,11 +328,6 @@ SceneNode *Engine::createEmptyNode(const std::string &nodeName)
         scene.selectNode(node);
     }
     return node;
-}
-
-void Engine::loadBackground(const std::string &filename)
-{
-    scene.loadBackground(filename);
 }
 
 void Engine::loadEnvironment(const std::string &filename)
@@ -609,13 +603,7 @@ void Engine::handleEvents()
                 captureFrame("output.tga");
                 std::cout << "Frame captured!" << std::endl;
                 break;
-            case SDLK_b:
-                {
-                    scene.loadBackground("background.tga");
-                }
-                break;
             case SDLK_c:
-                scene.clearBackground();
                 scene.clearEnvironment();
                 break;
 
@@ -954,7 +942,6 @@ void Engine::renderScene()
     std::vector<SceneNode *> visibleMeshes;
     scene.getVisibleMeshNodes(visibleMeshes);
 
-    syncBackground();
     syncEnvironment();
     syncGeometry();
 
@@ -1297,24 +1284,8 @@ void Engine::syncGeometry()
     cachedGeometryVersion = (long)scene.geometryVersion;
 }
 
-// The background is a texture on the device, so it only needs re-uploading
-// when it actually changes. clear() composites it; nothing here draws.
-void Engine::syncBackground()
-{
-    if ((long)scene.backgroundVersion == uploadedBackgroundVersion)
-        return;
-
-    if (scene.background && scene.background->buffer())
-        cudaSetBackground(scene.background->buffer(),
-                          scene.background->get_width(),
-                          scene.background->get_height(),
-                          scene.background->get_bytespp());
-    else
-        cudaClearBackground();
-
-    uploadedBackgroundVersion = (long)scene.backgroundVersion;
-}
-
+// The environment is a texture on the device, so it only needs re-uploading
+// when it actually changes. clear() draws it; nothing here does.
 void Engine::syncEnvironment()
 {
     if ((long)scene.environmentVersion == uploadedEnvironmentVersion)
@@ -1490,7 +1461,6 @@ void Engine::setSSAA(int factor)
 
     ssaaFactor = factor;
     // the new rasterizer owns none of the old one's textures
-    uploadedBackgroundVersion = -1;
     uploadedEnvironmentVersion = -1;
     if (!initCudaRasterizerSS(renderWidth, renderHeight, ssaaFactor))
     {
