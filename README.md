@@ -18,15 +18,10 @@ based rendering techniques with image-based lighting and control panel.
 <sub>A turn around of a toy car under an HDR environment, and a material slide
 from dielectric to metal and smooth to rough. </sub>
 
-![Crytek Sponza](docs/images/sponza.png)
-
-<sub>**Crytek Sponza:** 262,000+ triangles across 25 materials</sub>
-
-
-![Khronos AntiqueCamera on a tripod](docs/images/hero-camera.png)
-
-<sub>**Khronos AntiqueCamera:** 20,000+ triangles across two scene-graph nodes on
-a ground plane, with diffuse, object-space normal and specular maps.</sub>
+| | |
+|---|---|
+| ![Crytek Sponza](docs/images/sponza.png) | ![Khronos AntiqueCamera on a tripod](docs/images/hero-camera.png) |
+| <sub>**Crytek Sponza:** 262,000+ triangles across 25 materials</sub> | <sub>**Khronos AntiqueCamera:** 20,000+ triangles across two scene-graph nodes on a ground plane, with diffuse, object-space normal and specular maps.</sub> |
 
 
 ## Features
