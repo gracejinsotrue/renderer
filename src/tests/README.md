@@ -69,6 +69,20 @@ opposite side of the sphere. Getting both axes wrong at once is why a
 single-direction check would have been no use -- looking one way still
 produced a plausible colour, just the wrong one.
 
+It also covers the tone map, which nothing else does: the five differential
+tests all call `cudaSetToneMapping(0)`, because they compare the shading path
+against the CPU rasterizer and want the kernel's own numbers rather than a
+display transform of them. The check that matters there is that a radiance of
+1.5 does not come out at 255. Anything above white would clip to 255 under a
+plain clamp, so that one threshold is what separates a tone curve from no tone
+curve at all; a monotonicity check on its own would pass either way.
+
+The exposure sweep sums the three channels instead of reading the brightest.
+Green is already at 241 with exposure 1, near where the curve flattens, so it
+moves 14 levels over an eightfold change while the dim channels move 135.
+Probing one channel measures where that channel sits on the curve, not whether
+exposure works.
+
 Its .hdr files are written by the test rather than committed. A map small
 enough to commit is still a binary nobody can read, and generating it means the
 Radiance decoder is checked against known values: the same pixels are written

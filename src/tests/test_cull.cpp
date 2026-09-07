@@ -10,6 +10,7 @@
 
 extern "C" {
     bool initCudaRasterizer(int,int); void cleanupCudaRasterizer(); void cudaClearBuffers();
+    void cudaSetToneMapping(int);
     void cudaRenderTriangle(const Vec4f&,const Vec4f&,const Vec4f&,const TGAColor&);
     void cudaBlitToTexture(void*,int);
     void cudaGetRasterStats(int*,int*,int*,int*);
@@ -23,6 +24,10 @@ int main(int argc, char **argv) {
     printf("model: %s, %d faces\n\n", objpath, m.nfaces());
 
     if (!initCudaRasterizer(W,H)) { printf("SKIP: no CUDA\n"); return 77; }
+    // The reference this compares against is the shading path itself, not a
+    // display of it, so the tone map is off: it wants the kernel's own numbers
+    // rather than exposure and a filmic curve applied to them.
+    cudaSetToneMapping(0);
 
     // frame the camera to the model's bounding box. a fixed camera left the
     // rumi models almost entirely off-screen, which made the disagreement

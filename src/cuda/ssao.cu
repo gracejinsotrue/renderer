@@ -175,7 +175,7 @@ void ssao_blur_kernel(const float* ao_in, float* ao_out, int width, int height)
 // writes the occlusion term straight to the frame as greyscale, so the term
 // can be inspected on its own instead of inferred from the shaded result
 __global__
-void ssao_debug_kernel(unsigned char* framebuffer, const float* ao,
+void ssao_debug_kernel(float4* framebuffer, const float* ao,
                        const float* normalbuf, const int* zbuffer,
                        const float* inv_vp, const float* vp,
                        int mode, int width, int height)
@@ -184,16 +184,18 @@ void ssao_debug_kernel(unsigned char* framebuffer, const float* ao,
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= width || y >= height) return;
     int idx = y * width + x;
-    int ci = ((height - 1 - y) * width + x) * 3;
+    int ci = (height - 1 - y) * width + x;
 
+    // These write 0..1 like every other producer, but they are measurements
+    // rather than light: the tone map is told to pass them through.
     if (mode == 2) {
         // eye-space normal as rgb, 0.5 grey is zero
         float nx = normalbuf[idx * 3 + 0];
         float ny = normalbuf[idx * 3 + 1];
         float nz = normalbuf[idx * 3 + 2];
-        framebuffer[ci + 0] = (unsigned char)(fminf(1.f, fmaxf(0.f, nx * 0.5f + 0.5f)) * 255.f);
-        framebuffer[ci + 1] = (unsigned char)(fminf(1.f, fmaxf(0.f, ny * 0.5f + 0.5f)) * 255.f);
-        framebuffer[ci + 2] = (unsigned char)(fminf(1.f, fmaxf(0.f, nz * 0.5f + 0.5f)) * 255.f);
+        framebuffer[ci] = make_float4(fminf(1.f, fmaxf(0.f, nx * 0.5f + 0.5f)),
+                                      fminf(1.f, fmaxf(0.f, ny * 0.5f + 0.5f)),
+                                      fminf(1.f, fmaxf(0.f, nz * 0.5f + 0.5f)), 1.f);
         return;
     }
     if (mode == 4) {
@@ -201,36 +203,34 @@ void ssao_debug_kernel(unsigned char* framebuffer, const float* ao,
         // red is x error, green y, blue depth error, all scaled by 16.
         float d = __int_as_float(zbuffer[idx]);
         if (d <= 0.0f) {
-            framebuffer[ci+0]=framebuffer[ci+1]=framebuffer[ci+2]=0; return;
+            framebuffer[ci] = make_float4(0.f, 0.f, 0.f, 1.f); return;
         }
         float ex, ey, ez;
         mat4_mul_point(inv_vp, (float)x, (float)y, d, ex, ey, ez);
         float rx, ry, rz;
         mat4_mul_point(vp, ex, ey, ez, rx, ry, rz);
-        float e0 = fabsf(rx - (float)x) * 16.0f;
-        float e1 = fabsf(ry - (float)y) * 16.0f;
-        float e2 = fabsf(rz - d) * 16.0f;
-        framebuffer[ci+0] = (unsigned char)fminf(255.f, e0);
-        framebuffer[ci+1] = (unsigned char)fminf(255.f, e1);
-        framebuffer[ci+2] = (unsigned char)fminf(255.f, e2);
+        float e0 = fabsf(rx - (float)x) * (16.0f / 255.f);
+        float e1 = fabsf(ry - (float)y) * (16.0f / 255.f);
+        float e2 = fabsf(rz - d) * (16.0f / 255.f);
+        framebuffer[ci] = make_float4(fminf(1.f, e0), fminf(1.f, e1),
+                                      fminf(1.f, e2), 1.f);
         return;
     }
     if (mode == 3) {
-        // raw screen depth, 0..255 already
-        float d = __int_as_float(zbuffer[idx]);
-        unsigned char v = (unsigned char)fminf(255.f, fmaxf(0.f, d));
-        framebuffer[ci + 0] = v; framebuffer[ci + 1] = v; framebuffer[ci + 2] = v;
+        // raw screen depth, which spans 0..255
+        float d = __int_as_float(zbuffer[idx]) * (1.f / 255.f);
+        float v = fminf(1.f, fmaxf(0.f, d));
+        framebuffer[ci] = make_float4(v, v, v, 1.f);
         return;
     }
     float a = fminf(1.0f, fmaxf(0.0f, ao[idx]));
-    unsigned char v = (unsigned char)(a * 255.0f);
-    framebuffer[ci + 0] = v; framebuffer[ci + 1] = v; framebuffer[ci + 2] = v;
+    framebuffer[ci] = make_float4(a, a, a, 1.f);
 }
 
 // multiplies the occlusion into the finished frame. the framebuffer is
 // top-down and everything above is bottom-up, hence the flip on the index.
 __global__
-void ssao_apply_kernel(unsigned char* framebuffer, const float* ao,
+void ssao_apply_kernel(float4* framebuffer, const float* ao,
                        float intensity, int width, int height)
 {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -241,15 +241,15 @@ void ssao_apply_kernel(unsigned char* framebuffer, const float* ao,
     a = 1.0f - intensity * (1.0f - a);      // intensity 0 disables, 1 is full
     a = fminf(1.0f, fmaxf(0.0f, a));
 
-    int ci = ((height - 1 - y) * width + x) * 3;
-    for (int c = 0; c < 3; c++)
-        framebuffer[ci + c] = (unsigned char)(framebuffer[ci + c] * a);
+    int ci = (height - 1 - y) * width + x;
+    float4 c = framebuffer[ci];
+    framebuffer[ci] = make_float4(c.x * a, c.y * a, c.z * a, c.w);
 }
 
 // The whole occlusion pass. Debug mode replaces the apply step rather than
 // following it, so the term can be looked at instead of its effect.
 void cudaLaunchSSAO(const int* zbuffer, const float* normalbuf,
-                    float* ao, float* ao_blur, unsigned char* framebuffer,
+                    float* ao, float* ao_blur, float4* framebuffer,
                     const float* inv_vp, const float* vp,
                     const float* kernel_samples,
                     float radius, float bias, float intensity,

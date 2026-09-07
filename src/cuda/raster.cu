@@ -67,7 +67,7 @@ __global__
 void tiled_raster_kernel(const CudaTriangle* triangles,
                          const int* tile_counts, const int* tile_offsets,
                          const int* tri_indices, const CudaMaterial* materials,
-                         unsigned char* framebuffer, int* zbuffer,
+                         float4* framebuffer, int* zbuffer,
                          const int* shadowbuf, float* normalbuf,
                          int width, int height, int tiles_x, int* stats)
 {
@@ -82,10 +82,10 @@ void tiled_raster_kernel(const CudaTriangle* triangles,
 
     int pixel_idx = y * width + x;
 
-    // colour is stored top-down and in R,G,B order so the finished frame can be
-    // DMA'd straight into an SDL RGB24 texture with zero per-pixel host work.
+    // colour is stored top-down so the tone map's output can be DMA'd straight
+    // into an SDL RGB24 texture with zero per-pixel host work.
     // the zbuffer stays bottom-up (kernel-internal, nobody outside reads it).
-    int color_idx = ((height - 1 - y) * width + x) * 3;
+    int color_idx = (height - 1 - y) * width + x;
 
     const int* bin = tri_indices + tile_offsets[tile];
 
@@ -146,9 +146,9 @@ void tiled_raster_kernel(const CudaTriangle* triangles,
                                               pw0, pw1, pw2,
                                               shadowbuf, width, height);
 
-            framebuffer[color_idx + 0] = (unsigned char)f.r;
-            framebuffer[color_idx + 1] = (unsigned char)f.g;
-            framebuffer[color_idx + 2] = (unsigned char)f.b;
+            framebuffer[color_idx] = make_float4(f.r * (1.f / 255.f),
+                                                 f.g * (1.f / 255.f),
+                                                 f.b * (1.f / 255.f), 1.f);
 
             // eye-space normal for SSAO. indexed like the zbuffer (bottom-up),
             // since that is the space the occlusion pass works in. Unlit and
@@ -233,7 +233,7 @@ void cudaLaunchZbufferFill(int* zbuffer, int fill_val, int count)
 void cudaLaunchTiledRaster(const CudaTriangle* triangles, const int* tile_counts,
                            const int* tile_offsets, const int* tri_indices,
                            const CudaMaterial* materials,
-                           unsigned char* framebuffer, int* zbuffer,
+                           float4* framebuffer, int* zbuffer,
                            const int* shadowbuf, float* normalbuf,
                            int width, int height, int tiles_x, int tiles_y,
                            int* stats)

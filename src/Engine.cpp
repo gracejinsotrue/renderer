@@ -119,7 +119,7 @@ bool Engine::init()
     std::cout << "  B            - Load background.tga" << std::endl;
     std::cout << "  V            - Load environment.hdr" << std::endl;
     std::cout << "  C            - Clear the backdrop" << std::endl;
-    std::cout << "  [ / ]        - Environment exposure" << std::endl;
+    std::cout << "  [ / ]        - Exposure" << std::endl;
     std::cout << "  ESC          - Exit" << std::endl;
 
     cuda_available = initCudaRasterizerSS(renderWidth, renderHeight, ssaaFactor);
@@ -340,6 +340,8 @@ void Engine::loadEnvironment(const std::string &filename)
 void Engine::setExposure(float v)
 {
     exposure = v < 0.01f ? 0.01f : (v > 64.f ? 64.f : v);
+    if (cuda_available)
+        cudaSetExposure(exposure);
 }
 
 // OBJECT SELECTION MODELS
@@ -920,7 +922,8 @@ void Engine::renderScene()
         for (int r = 0; r < 4; r++)
             for (int c = 0; c < 4; c++)
                 inv16[r * 4 + c] = invCam[r][c];
-        cudaSetEnvironmentView(inv16, exposure);
+        cudaSetEnvironmentView(inv16);
+        cudaSetExposure(exposure);
     }
 
     // before the early return: present() blits whatever is in device memory,

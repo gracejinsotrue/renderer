@@ -236,15 +236,34 @@ int main(int argc, char **argv)
     check(up.b > 100 && up.r < 60 && up.g < 60,
           "looking up lands on the upper pole, so v is not flipped");
 
+    // The map's bright channels are 1.5, which is above white. Clamping would
+    // put them at exactly 255 and there would be nothing to distinguish a
+    // tone curve from a clip; the curve has to leave headroom instead.
+    check(front.g < 250.f && back.r < 250.f,
+          "radiance above 1 rolls off rather than clipping");
+
+    // Summed across channels rather than read off the brightest one. The
+    // green here is already 241 at exposure 1, near where the curve flattens,
+    // so it moves 14 levels over an eightfold exposure change while the two
+    // dim channels move 135. Probing a single channel measures where on the
+    // curve that channel happens to sit, not whether exposure works.
     printf("\n--- exposure\n");
-    TGAImage fDim = lookFrom(engine, Vec3f(0, 0, 3), "t_env_e1.tga");
-    Patch dim = centrePatch(fDim);
-    engine.setExposure(8.0f);
-    TGAImage fBright = lookFrom(engine, Vec3f(0, 0, 3), "t_env_e8.tga");
-    Patch bright = centrePatch(fBright);
-    report("exposure 1", dim);
-    report("exposure 8", bright);
-    check(bright.g > dim.g + 20, "exposure reaches the kernel");
+    const float stops[] = {0.25f, 1.0f, 8.0f};
+    float total[3];
+    for (int i = 0; i < 3; i++) {
+        engine.setExposure(stops[i]);
+        char name[32];
+        snprintf(name, sizeof(name), "t_env_e%d.tga", i);
+        TGAImage f = lookFrom(engine, Vec3f(0, 0, 3), name);
+        Patch p = centrePatch(f);
+        total[i] = p.r + p.g + p.b;
+        char label[32];
+        snprintf(label, sizeof(label), "exposure %.2f", stops[i]);
+        report(label, p);
+    }
+    check(total[1] > total[0] && total[2] > total[1],
+          "brightness rises monotonically with exposure");
+    check(total[2] - total[0] > 100.f, "the range covers more than rounding");
     engine.setExposure(1.0f);
 
     printf("\n--- under the geometry\n");

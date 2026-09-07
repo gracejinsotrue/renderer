@@ -6,6 +6,7 @@
 
 extern "C" {
     bool initCudaRasterizer(int width, int height);
+    void cudaSetToneMapping(int);
     void cleanupCudaRasterizer();
     void cudaClearBuffers();
     void cudaRenderTriangle(const Vec4f &v0, const Vec4f &v1, const Vec4f &v2, const TGAColor &color);
@@ -30,6 +31,10 @@ static void span(const unsigned char *buf, int W, int H, int stride, int &first,
 int main() {
     const int W = 64, H = 64;
     if (!initCudaRasterizer(W, H)) { printf("SKIP: no CUDA device\n"); return 77; }
+    // The reference this compares against is the shading path itself, not a
+    // display of it, so the tone map is off: it wants the kernel's own numbers
+    // rather than exposure and a filmic curve applied to them.
+    cudaSetToneMapping(0);
 
     cudaClearBuffers();
     // triangle sitting at LOW raster y. raster y=0 is the BOTTOM of the image

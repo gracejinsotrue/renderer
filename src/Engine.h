@@ -44,9 +44,14 @@ extern "C"
     void cudaSetEnvironment(const float *rgba, int w, int h);
     void cudaClearEnvironment();
     // row-major inverse of Viewport*Projection*ModelView, at render
-    // resolution: what turns a pixel back into a world-space view ray. Both
-    // are per-frame, so a rasterizer rebuild does not strand them.
-    void cudaSetEnvironmentView(const float *inv16, float exposure);
+    // resolution: what turns a pixel back into a world-space view ray. Sent
+    // every frame, so a rasterizer rebuild does not strand it.
+    void cudaSetEnvironmentView(const float *inv16);
+    // linear multiplier applied by the tone map, ahead of the curve
+    void cudaSetExposure(float exposure);
+    // 0 emits the linear frame scaled to 0..255 with no exposure and no
+    // curve. The differential tests want the shading path's own numbers.
+    void cudaSetToneMapping(int enabled);
     // screen space ambient occlusion over the finished device frame
     void cudaApplySSAO(const float *inv_vp16, const float *vp16,
                        float radius, float intensity, float bias, int debug);
@@ -129,9 +134,7 @@ private:
     // shadow map comparison bias; see setShadowBias
     float shadowBias;
 
-    // Linear multiplier on the environment's radiance before the tone curve.
-    // Only the environment reads it: the shading path has no HDR values to
-    // expose yet.
+    // Linear multiplier applied to the whole frame before the tone curve.
     float exposure;
 
     // Rendering dimensions

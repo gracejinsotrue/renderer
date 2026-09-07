@@ -9,6 +9,7 @@
 #include "transform.h"
 extern "C" {
     bool initCudaRasterizer(int,int); void cleanupCudaRasterizer(); void cudaClearBuffers();
+    void cudaSetToneMapping(int);
     void cudaRenderTriangle(const Vec4f&,const Vec4f&,const Vec4f&,const TGAColor&);
     void cudaBlitToTexture(void*,int); void cudaGetRasterStats(int*,int*,int*,int*);
     int  cudaCreateMesh(const float*,int,const int*,int,const float*,const float*);
@@ -22,6 +23,10 @@ int main(int argc,char**argv){
     const char* path = (argc>1)?argv[1]:"../obj/african_head.obj";
     Model m(path);
     if(!initCudaRasterizer(W,H)){printf("SKIP: no CUDA\n");return 77;}
+    // The reference this compares against is the shading path itself, not a
+    // display of it, so the tone map is off: it wants the kernel's own numbers
+    // rather than exposure and a filmic curve applied to them.
+    cudaSetToneMapping(0);
 
     Vec3f lo(1e9f,1e9f,1e9f), hi(-1e9f,-1e9f,-1e9f);
     for(int i=0;i<m.nverts();i++){Vec3f v=m.vert(i);

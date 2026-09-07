@@ -105,7 +105,11 @@ static bool uploadFloatTexture(const float* rgba, int w, int h,
 class CudaTriangleRasterizer {
 private:
     CudaTriangle* d_triangles;
-    unsigned char* d_framebuffer;
+    // Linear radiance, unbounded above, at render resolution. Every colour
+    // producer writes here; only the tone map reads it and turns it into
+    // something a display can show. float4 rather than three floats so a
+    // pixel is one 16-byte transaction.
+    float4* d_hdr;
     int* d_zbuffer;
     int* d_tile_counts;    // one per tile, reset each flush
     int* d_tile_offsets;   // exclusive prefix sum of the counts
@@ -150,7 +154,18 @@ private:
     int width, height;
     int out_width, out_height;
     int ss;
-    unsigned char* d_resolve;   // NULL when ss == 1: the frame is already 1:1
+    float4* d_hdr_resolved;     // NULL when ss == 1: the frame is already 1:1
+    // The tone map's output, and the only 8-bit colour in the pipeline.
+    // Always out_width x out_height, top-down R,G,B.
+    unsigned char* d_ldr;
+    float tone_exposure;
+    // Off for the differential tests, which compare the shading path against
+    // the CPU rasterizer and want its numbers rather than a display transform
+    // of them.
+    bool tone_enabled;
+    // set by applySSAO when a debug view is up, cleared by clear(). those
+    // views carry normals and occlusion, which a tone curve would misreport.
+    bool tone_passthrough;
     int tiles_x, tiles_y, num_tiles;
 
     // optional background image, composited by clear() instead of a memset.
@@ -168,7 +183,6 @@ private:
     cudaTextureObject_t d_env_tex;
     bool has_env;
     Mat4 env_inv_vp;
-    float env_exposure;
 
     // per-stage GPU timing. nsys can't get a GPU timeline through WSL2 and
     // ncu needs a driver permission change, so the kernels time themselves.
@@ -187,8 +201,10 @@ public:
     CudaTriangleRasterizer(int out_w, int out_h, int ss_factor)
         : width(out_w * ss_factor), height(out_h * ss_factor),
           out_width(out_w), out_height(out_h), ss(ss_factor),
-          d_resolve(NULL), d_bg_arr(NULL), d_bg_tex(0), has_bg(false),
-          d_env_arr(NULL), d_env_tex(0), has_env(false), env_exposure(1.0f),
+          d_hdr_resolved(NULL), d_ldr(NULL), tone_exposure(1.0f),
+          tone_enabled(true), tone_passthrough(false),
+          d_bg_arr(NULL), d_bg_tex(0), has_bg(false),
+          d_env_arr(NULL), d_env_tex(0), has_env(false),
           d_draws(NULL), draw_capacity(0), h_draw_faces(0),
           initialized(false),
           stat_submitted(0), stat_culled_back(0), stat_culled_offscreen(0) {
@@ -209,10 +225,17 @@ public:
             return;
         }
 
-        err = cudaMalloc(&d_framebuffer, width * height * 3);
+        err = cudaMalloc(&d_hdr, (size_t)width * height * sizeof(float4));
         if (err != cudaSuccess) {
             printf("CUDA malloc framebuffer failed: %s\n", cudaGetErrorString(err));
             cudaFree(d_triangles);
+            return;
+        }
+
+        err = cudaMalloc(&d_ldr, (size_t)out_width * out_height * 3);
+        if (err != cudaSuccess) {
+            printf("CUDA malloc display frame failed: %s", cudaGetErrorString(err));
+            cudaFree(d_triangles); cudaFree(d_hdr);
             return;
         }
 
@@ -220,14 +243,14 @@ public:
         if (err != cudaSuccess) {
             printf("CUDA malloc zbuffer failed: %s\n", cudaGetErrorString(err));
             cudaFree(d_triangles);
-            cudaFree(d_framebuffer);
+            cudaFree(d_hdr); cudaFree(d_ldr);
             return;
         }
 
         err = cudaMalloc(&d_tile_counts, num_tiles * sizeof(int));
         if (err != cudaSuccess) {
             printf("CUDA malloc tile counts failed: %s\n", cudaGetErrorString(err));
-            cudaFree(d_triangles); cudaFree(d_framebuffer); cudaFree(d_zbuffer);
+            cudaFree(d_triangles); cudaFree(d_hdr); cudaFree(d_ldr); cudaFree(d_zbuffer);
             return;
         }
 
@@ -255,7 +278,7 @@ public:
         cudaMalloc(&d_ssao_inv_vp, 16 * sizeof(float));
         cudaMalloc(&d_ssao_vp,     16 * sizeof(float));
         if (ss > 1) {
-            err = cudaMalloc(&d_resolve, (size_t)out_width * out_height * 3);
+            err = cudaMalloc(&d_hdr_resolved, (size_t)out_width * out_height * sizeof(float4));
             if (err != cudaSuccess) {
                 printf("CUDA malloc resolve buffer failed: %s\n", cudaGetErrorString(err));
                 return;
@@ -291,7 +314,7 @@ public:
     ~CudaTriangleRasterizer() {
         if (initialized) {
             cudaFree(d_triangles);
-            cudaFree(d_framebuffer);
+            cudaFree(d_hdr); cudaFree(d_ldr);
             cudaFree(d_zbuffer);
             cudaFree(d_tile_counts);
             cudaFree(d_tile_offsets);
@@ -310,7 +333,7 @@ public:
             cudaFree(d_ssao_kernel);
             cudaFree(d_ssao_inv_vp);
             cudaFree(d_ssao_vp);
-            if (d_resolve) cudaFree(d_resolve);
+            if (d_hdr_resolved) cudaFree(d_hdr_resolved);
             clearBackground();
             clearEnvironment();
             cudaEventDestroy(ev_start);
@@ -367,12 +390,14 @@ public:
         if (!initialized || intensity <= 0.0f) return;
         flush();
 
+        tone_passthrough = (ssao_debug != 0);
+
         cudaMemcpy(d_ssao_inv_vp, inv_vp16, 16 * sizeof(float),
                    cudaMemcpyHostToDevice);
         cudaMemcpy(d_ssao_vp, vp16, 16 * sizeof(float),
                    cudaMemcpyHostToDevice);
 
-        cudaLaunchSSAO(d_zbuffer, d_normalbuf, d_ao, d_ao_blur, d_framebuffer,
+        cudaLaunchSSAO(d_zbuffer, d_normalbuf, d_ao, d_ao_blur, d_hdr,
                        d_ssao_inv_vp, d_ssao_vp, d_ssao_kernel,
                        radius, bias, intensity, ssao_debug, width, height);
     }
@@ -380,13 +405,16 @@ public:
     void clear() {
         if (!initialized) return;
 
+        tone_passthrough = false;
+
         if (has_env) {
-            cudaLaunchEnvironment(d_framebuffer, d_env_tex, env_inv_vp,
-                                  env_exposure, width, height);
+            cudaLaunchEnvironment(d_hdr, d_env_tex, env_inv_vp, width, height);
         } else if (has_bg) {
-            cudaLaunchBackground(d_framebuffer, d_bg_tex, width, height);
+            cudaLaunchBackground(d_hdr, d_bg_tex, width, height);
         } else {
-            cudaMemset(d_framebuffer, 0, width * height * 3);
+            // not a memset: black is four floats, and only three of them are
+            // zero. alpha stays 1 so the buffer is always a valid colour.
+            cudaLaunchClearColour(d_hdr, width * height);
         }
         cudaMemset(d_normalbuf, 0, (size_t)width * height * 3 * sizeof(float));
 
@@ -636,11 +664,11 @@ public:
                                        width, height, tiles_x, tiles_y);
             // Back half: one shade per covered pixel, whatever the overdraw was.
             cudaLaunchDeferredShade(d_triangles, d_materials, d_visbuffer,
-                                    d_framebuffer, d_zbuffer, d_shadowbuf,
+                                    d_hdr, d_zbuffer, d_shadowbuf,
                                     d_normalbuf, width, height, d_stats);
         } else {
             cudaLaunchTiledRaster(d_triangles, d_tile_counts, d_tile_offsets,
-                                  d_tri_indices, d_materials, d_framebuffer,
+                                  d_tri_indices, d_materials, d_hdr,
                                   d_zbuffer, d_shadowbuf, d_normalbuf,
                                   width, height, tiles_x, tiles_y, d_stats);
         }
@@ -668,13 +696,25 @@ public:
     // already wrote it top-down in R,G,B, so no conversion is needed and one
     // 2D memcpy replaces ~2M per-pixel host operations a frame.
     // dst_pitch is SDL's row stride, which may be wider than width * 3.
-    // The buffer callers should read: the resolved one when supersampling,
-    // otherwise the render target itself. Always out_width x out_height.
+    // Resolve, then tone map. Always out_width x out_height, and the single
+    // place linear radiance becomes displayable: everything upstream of it is
+    // float and everything downstream is the 8-bit frame.
     unsigned char* resolvedFramebuffer() {
-        if (ss <= 1) return d_framebuffer;
-        cudaLaunchDownsample(d_framebuffer, d_resolve, out_width, out_height, ss);
-        return d_resolve;
+        const float4* src = d_hdr;
+        if (ss > 1) {
+            cudaLaunchDownsample(d_hdr, d_hdr_resolved, out_width, out_height, ss);
+            src = d_hdr_resolved;
+        }
+        int passthrough = (tone_passthrough || !tone_enabled) ? 1 : 0;
+        cudaLaunchToneMap(src, d_ldr, out_width, out_height, tone_exposure,
+                          passthrough);
+        return d_ldr;
     }
+
+    // Exposure is a per-frame display control, not scene state, so it lives
+    // here rather than travelling with the environment.
+    void setExposure(float e) { tone_exposure = e > 0.f ? e : 0.f; }
+    void setToneMapping(bool on) { tone_enabled = on; }
 
     unsigned char* deviceFramebuffer(int* w, int* h) {
         if (w) *w = out_width;
@@ -803,12 +843,9 @@ public:
         has_env = false;
     }
 
-    // Both are per-frame view state, so they arrive together: exposure has to
-    // be re-sent after a resize anyway, since that builds a new rasterizer.
-    void setEnvironmentView(const float* inv16, float exposure) {
+    void setEnvironmentView(const float* inv16) {
         if (inv16)
             for (int i = 0; i < 16; i++) env_inv_vp.m[i] = inv16[i];
-        env_exposure = exposure > 0.f ? exposure : 0.f;
     }
 
     void setMeshTexture(int h, int slot, const unsigned char* px,
@@ -1011,8 +1048,14 @@ extern "C" {
     void cudaClearEnvironment() {
         if (g_cuda_rasterizer) g_cuda_rasterizer->clearEnvironment();
     }
-    void cudaSetEnvironmentView(const float* inv16, float exposure) {
-        if (g_cuda_rasterizer) g_cuda_rasterizer->setEnvironmentView(inv16, exposure);
+    void cudaSetEnvironmentView(const float* inv16) {
+        if (g_cuda_rasterizer) g_cuda_rasterizer->setEnvironmentView(inv16);
+    }
+    void cudaSetExposure(float exposure) {
+        if (g_cuda_rasterizer) g_cuda_rasterizer->setExposure(exposure);
+    }
+    void cudaSetToneMapping(int enabled) {
+        if (g_cuda_rasterizer) g_cuda_rasterizer->setToneMapping(enabled != 0);
     }
     int cudaLiveMeshCount() {
         return g_cuda_rasterizer ? g_cuda_rasterizer->liveMeshCount() : 0;

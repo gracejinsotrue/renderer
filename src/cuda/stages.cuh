@@ -27,7 +27,7 @@ void cudaLaunchZbufferFill(int* zbuffer, int fill_val, int count);
 void cudaLaunchTiledRaster(const CudaTriangle* triangles, const int* tile_counts,
                            const int* tile_offsets, const int* tri_indices,
                            const CudaMaterial* materials,
-                           unsigned char* framebuffer, int* zbuffer,
+                           float4* framebuffer, int* zbuffer,
                            const int* shadowbuf, float* normalbuf,
                            int width, int height, int tiles_x, int tiles_y,
                            int* stats);
@@ -51,26 +51,35 @@ void cudaLaunchVisbufferFill(unsigned long long* visbuffer, int count);
 void cudaLaunchDeferredShade(const CudaTriangle* triangles,
                              const CudaMaterial* materials,
                              const unsigned long long* visbuffer,
-                             unsigned char* framebuffer, int* zbuffer,
+                             float4* framebuffer, int* zbuffer,
                              const int* shadowbuf, float* normalbuf,
                              int width, int height, int* stats);
 
 // ssao.cu: occlude the finished frame in place. ao and ao_blur are scratch.
 void cudaLaunchSSAO(const int* zbuffer, const float* normalbuf,
-                    float* ao, float* ao_blur, unsigned char* framebuffer,
+                    float* ao, float* ao_blur, float4* framebuffer,
                     const float* inv_vp, const float* vp,
                     const float* kernel_samples,
                     float radius, float bias, float intensity,
                     int ssao_debug, int width, int height);
 
-// resolve.cu: supersample resolve and background composite
-void cudaLaunchDownsample(const unsigned char* src, unsigned char* dst,
+// resolve.cu: supersample resolve and background composite. Everything up to
+// the tone map works in the linear float target; only cudaLaunchToneMap
+// produces the 8-bit frame the presenter and the capture path read.
+void cudaLaunchClearColour(float4* framebuffer, int count);
+void cudaLaunchDownsample(const float4* src, float4* dst,
                           int out_w, int out_h, int ss);
-void cudaLaunchBackground(unsigned char* framebuffer, cudaTextureObject_t bg,
+void cudaLaunchBackground(float4* framebuffer, cudaTextureObject_t bg,
                           int width, int height);
 
 // resolve.cu: the equirectangular environment, in place of the background.
 // inv_vp is the row-major inverse of Viewport*Projection*ModelView for this
 // frame, which is what turns a pixel back into a world-space view ray.
-void cudaLaunchEnvironment(unsigned char* framebuffer, cudaTextureObject_t env,
-                           Mat4 inv_vp, float exposure, int width, int height);
+void cudaLaunchEnvironment(float4* framebuffer, cudaTextureObject_t env,
+                           Mat4 inv_vp, int width, int height);
+
+// resolve.cu: linear radiance -> the 8-bit frame. passthrough skips exposure
+// and the curve for the SSAO debug views, which carry normals and occlusion
+// rather than light and would be misreported by a tone curve.
+void cudaLaunchToneMap(const float4* src, unsigned char* dst,
+                       int width, int height, float exposure, int passthrough);

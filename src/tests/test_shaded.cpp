@@ -14,6 +14,7 @@
 
 extern "C" {
     bool initCudaRasterizer(int,int); void cleanupCudaRasterizer(); void cudaClearBuffers();
+    void cudaSetToneMapping(int);
     void cudaCopyResults(TGAImage&);
     int  cudaCreateMesh(const float*,int,const int*,int,const float*,const float*);
     void cudaSetMeshTexture(int,int,const unsigned char*,int,int,int);
@@ -74,6 +75,10 @@ int main(int argc,char**argv){
         return 77;
     }
     if(!initCudaRasterizer(W,H)){printf("SKIP: no CUDA\n");return 77;}
+    // The reference this compares against is the shading path itself, not a
+    // display of it, so the tone map is off: it wants the kernel's own numbers
+    // rather than exposure and a filmic curve applied to them.
+    cudaSetToneMapping(0);
 
     Vec3f lo(1e9f,1e9f,1e9f), hi(-1e9f,-1e9f,-1e9f);
     for(int i=0;i<m.nverts();i++){Vec3f v=m.vert(i);
