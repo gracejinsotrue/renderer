@@ -119,6 +119,10 @@ capture_scene: $(ENGOBJS)
 	mkdir -p tests/bin
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -I. -o tests/bin/capture_scene 	  tests/capture_scene.cpp $(ENGOBJS) $(LIBS) 	  -L/usr/local/cuda/lib64 -lcudart
 
+capture_clip: $(ENGOBJS)
+	mkdir -p tests/bin
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -I. -o tests/bin/capture_clip 	  tests/capture_clip.cpp $(ENGOBJS) $(LIBS) 	  -L/usr/local/cuda/lib64 -lcudart
+
 test_meshcache: $(ENGOBJS)
 	mkdir -p tests/bin
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -I. -o tests/bin/test_meshcache 	  tests/test_meshcache.cpp $(ENGOBJS) $(LIBS) 	  -L/usr/local/cuda/lib64 -lcudart
@@ -161,7 +165,7 @@ setup:
 capture-rotation: $(TARGET)
 	./$(TARGET) --capture-sequence rotation 360 10.0
 
-.PHONY: all tests test_brdf test_engine test_ssao test_ssaa test_meshcache clean install-deps install-deps-mac run debug setup capture-rotation
+.PHONY: all tests test_brdf test_engine test_ssao test_ssaa test_meshcache capture_clip clean install-deps install-deps-mac run debug setup capture-rotation
 
 # header dependencies come from -MMD -MP via $(DEPS); there is no hand-written
 # list to keep in sync.

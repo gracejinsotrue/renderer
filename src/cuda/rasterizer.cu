@@ -919,9 +919,8 @@ public:
 
         bool ok = true;
         for (int lvl = 0; lvl < IBL_SPEC_LEVELS && ok; lvl++) {
-            int lw = IBL_SPEC_W >> lvl, lh = IBL_SPEC_H >> lvl;
-            if (lw < 4) lw = 4;
-            if (lh < 2) lh = 2;
+            int lw, lh;
+            ibl_spec_size(lvl, &lw, &lh);
             float rough = (float)lvl / (float)(IBL_SPEC_LEVELS - 1);
 
             float4* d_lvl = NULL;

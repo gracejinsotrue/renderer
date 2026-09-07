@@ -14,6 +14,7 @@ Engine::Engine(int winWidth, int winHeight, int renWidth, int renHeight)
       captureStaging(renWidth, renHeight, TGAImage::RGB),
       uploadedEnvironmentVersion(-1),
       cachedGeometryVersion(0),
+      deltaTime(0.0f),
       running(false), showStats(true), ssaaFactor(2),
       ssaoEnabled(true), ssaoRadius(0.18f), ssaoIntensity(0.85f), ssaoDebug(0),
       shadowBias(2.0f), exposure(1.0f), iblIntensity(1.0f),

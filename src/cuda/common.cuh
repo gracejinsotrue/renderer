@@ -63,12 +63,29 @@ struct CudaTriangle {
     int bbox_min_x, bbox_min_y, bbox_max_x, bbox_max_y;
 };
 
-// Prefiltered specular levels. Level 0 is roughness 0, a mirror, and level
-// IBL_SPEC_LEVELS-1 is roughness 1; level i is half the width of level i-1,
-// because a wider lobe cannot carry the detail a larger map would hold.
+// Prefiltered specular levels. Level 0 is roughness 0 and level
+// IBL_SPEC_LEVELS-1 is roughness 1.
 #define IBL_SPEC_LEVELS 5
-#define IBL_SPEC_W 128
-#define IBL_SPEC_H 64
+
+// Level 0 is a straight reduction rather than a convolution -- a mirror's lobe
+// is a delta function -- so it is cheap and kept large: it is the only level
+// where the environment's own detail survives, and a chrome surface reflecting
+// a 128x64 map looks like frosted glass however good the source was.
+//
+// The convolved levels are small on purpose. A lobe that wide cannot carry the
+// detail a larger map would hold, and the convolution is O(output x source), so
+// each doubling costs four times as much for something nobody can see.
+__host__ __device__ inline
+void ibl_spec_size(int level, int* w, int* h)
+{
+    switch (level) {
+        case 0:  *w = 512; *h = 256; break;
+        case 1:  *w = 128; *h = 64;  break;
+        case 2:  *w = 64;  *h = 32;  break;
+        case 3:  *w = 32;  *h = 16;  break;
+        default: *w = 16;  *h = 8;   break;
+    }
+}
 
 // The environment BRDF table, over (n.v, roughness). Small because it is
 // smooth: the function has no features a larger table would resolve.

@@ -20,6 +20,11 @@
 //                      (default 2; negative renders the shadow debug view)
 //   EYE=x,y,z          camera position, overrides ORBIT/ZOOM
 //   LOOK=x,y,z         what the camera points at         (default the origin)
+//   ENV=path.hdr       equirectangular environment: backdrop and IBL
+//   EXPOSURE=f         linear multiplier before the tone curve (default 1)
+//   IBL=f              how much environment irradiance reaches the shading
+//   METALLIC=f         0 dielectric, 1 conductor           (default 0)
+//   ROUGHNESS=f        perceptual, 0..1                    (default 0.5)
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -122,6 +127,19 @@ int main(int argc, char **argv)
     }
     if (getenv("INTENSITY"))
         engine.getScene().light.intensity = (float)atof(getenv("INTENSITY"));
+
+    // Loaded before the material settings so a figure can pair a surface with
+    // the environment lighting it, which is the only way a metal shows
+    // anything at all.
+    if (const char *env = getenv("ENV"))
+    {
+        engine.loadEnvironment(env);
+        if (!engine.getScene().environment) printf("could not load %s\n", env);
+    }
+    if (getenv("EXPOSURE")) engine.setExposure((float)atof(getenv("EXPOSURE")));
+    if (getenv("IBL")) engine.setIBLIntensity((float)atof(getenv("IBL")));
+    if (getenv("METALLIC")) engine.setMetallic((float)atof(getenv("METALLIC")));
+    if (getenv("ROUGHNESS")) engine.setRoughness((float)atof(getenv("ROUGHNESS")));
 
     if (getenv("ZOOM")) engine.zoomCamera((float)atof(getenv("ZOOM")));
 

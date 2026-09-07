@@ -112,7 +112,9 @@ private:
     // host copy, written only when captureFrame() asks for a TGA
     TGAImage captureStaging;
 
-    // for timing
+    // for timing. Only run() maintains deltaTime, so anything driving the
+    // loop by hand -- the tests, the capture tools -- leaves it at zero and
+    // getFPS() returns its clamp rather than a reading of nothing.
     std::chrono::high_resolution_clock::time_point lastTime;
     float deltaTime;
 

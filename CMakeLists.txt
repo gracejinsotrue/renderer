@@ -258,7 +258,8 @@ if(BUILD_TESTING_RENDERER)
   # Local benchmarking and inspection tools. These are gitignored, so build
   # whichever happen to be present rather than failing on the ones that are not.
   set(OPTIONAL_TOOLS test_wind bench bench_cull bench_tile profile_frame
-                     render_png bench_meshes capture_scene bench_overdraw)
+                     render_png bench_meshes capture_scene capture_clip
+                     bench_overdraw)
 
   # Needs neither a GPU nor a model: it integrates the BRDF functions on the
   # host and checks the result against their definitions, so it is the one
