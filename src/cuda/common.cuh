@@ -63,6 +63,19 @@ struct CudaTriangle {
     int bbox_min_x, bbox_min_y, bbox_max_x, bbox_max_y;
 };
 
+// Prefiltered specular levels. Level 0 is roughness 0, a mirror, and level
+// IBL_SPEC_LEVELS-1 is roughness 1; level i is half the width of level i-1,
+// because a wider lobe cannot carry the detail a larger map would hold.
+#define IBL_SPEC_LEVELS 5
+#define IBL_SPEC_W 128
+#define IBL_SPEC_H 64
+
+// The environment BRDF table, over (n.v, roughness). Small because it is
+// smooth: the function has no features a larger table would resolve.
+#define IBL_BRDF_LUT_SIZE 64
+// Monte Carlo budget per texel. The table stops changing visibly here.
+#define IBL_BRDF_LUT_SAMPLES 1024
+
 // one per mesh per frame. the raster kernel rasterizes every mesh in a single
 // launch, so per-mesh state has to be reachable from the triangle itself.
 struct CudaMaterial {
@@ -99,6 +112,15 @@ struct CudaMaterial {
     // inside the BRDF.
     float metallic;
     float roughness;
+    // Specular image-based lighting, split-sum. prefiltered[i] is the
+    // environment blurred by the GGX lobe at roughness i/(levels-1); brdf_lut
+    // is the scale and bias applied to F0. The shader lerps between two levels
+    // rather than relying on a mip chain, because each level is its own
+    // equirectangular map at its own size.
+    cudaTextureObject_t prefiltered[IBL_SPEC_LEVELS];
+    cudaTextureObject_t brdf_lut;
+    int has_prefiltered;
+    int has_brdf_lut;
 };
 // starting capacity only. the table is uploaded fresh each flush and grown on
 // demand, so there is no cap on how many meshes a frame may draw.

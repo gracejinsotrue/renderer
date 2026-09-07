@@ -141,7 +141,11 @@ independently what the reference should be; never paste the kernel's version
 into it. Moving to Cook-Torrance was the first real exercise of that rule:
 the reference was rewritten from the published equations, and it is
 parameterised by GGX alpha where the kernel takes perceptual roughness and
-squares it, so the two do not even share where the square goes.
+squares it, so the two do not even share where the square goes. It builds
+its own environment BRDF table too, from a golden-ratio sequence rather than
+the kernel's bit-reversal, because the shader's ambient term uses one and a
+reference without it would be short by a fraction of a byte everywhere --
+which could only be absorbed by loosening a threshold.
 
 ## Local tools
 

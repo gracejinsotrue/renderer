@@ -273,7 +273,12 @@ ShadedFragment shade_fragment(const CudaTriangle& tri, const CudaMaterial& mat,
     // black, and anything brighter starts competing with the light.
     const float AMBIENT_L = 0.03f;
     float er = AMBIENT_L, eg = AMBIENT_L, eb = AMBIENT_L;
-    if (mat.has_irradiance) {
+    // What a mirror would see. Same fallback logic: reflecting a uniform
+    // environment gives back the constant, so this starts equal to the
+    // irradiance and is only replaced when there is a map to reflect.
+    float pr = AMBIENT_L, pg = AMBIENT_L, pb = AMBIENT_L;
+
+    if (mat.has_irradiance || mat.has_prefiltered) {
         // The mapped normal is used, not the geometric one: unlike the SSAO
         // hemisphere, a texture lookup has nothing to be tilted into.
         const float* M = mat.e2w;
@@ -283,23 +288,83 @@ ShadedFragment shade_fragment(const CudaTriangle& tri, const CudaMaterial& mat,
         float wl = sqrtf(wx*wx + wy*wy + wz*wz);
         if (wl > 1e-12f) { wx /= wl; wy /= wl; wz /= wl; }
 
-        float iu, iv;
-        equirect_uv(wx, wy, wz, &iu, &iv);
-        float4 E = tex2D<float4>(mat.irradiance, iu, iv);
-        er = E.x * mat.ibl_intensity;
-        eg = E.y * mat.ibl_intensity;
-        eb = E.z * mat.ibl_intensity;
+        if (mat.has_irradiance) {
+            float iu, iv;
+            equirect_uv(wx, wy, wz, &iu, &iv);
+            float4 E = tex2D<float4>(mat.irradiance, iu, iv);
+            er = E.x * mat.ibl_intensity;
+            eg = E.y * mat.ibl_intensity;
+            eb = E.z * mat.ibl_intensity;
+        }
+
+        if (mat.has_prefiltered) {
+            // Reflect the view about the normal, in eye space, then carry the
+            // result to world space. Reflecting after the rotation would work
+            // equally well; doing it here keeps V's (0,0,1) explicit.
+            float rx = 2.0f * ndotv * nxi;
+            float ry = 2.0f * ndotv * nyi;
+            float rz = 2.0f * ndotv * nzi - 1.0f;
+            float wrx = M[0]*rx + M[1]*ry + M[2]*rz;
+            float wry = M[3]*rx + M[4]*ry + M[5]*rz;
+            float wrz = M[6]*rx + M[7]*ry + M[8]*rz;
+            float rl = sqrtf(wrx*wrx + wry*wry + wrz*wrz);
+            if (rl > 1e-12f) { wrx /= rl; wry /= rl; wrz /= rl; }
+
+            float su, sv;
+            equirect_uv(wrx, wry, wrz, &su, &sv);
+
+            // Levels are separate maps at separate sizes, not a mip chain, so
+            // the blend between the two bracketing roughnesses is done here.
+            float lod = rough * (float)(IBL_SPEC_LEVELS - 1);
+            int l0 = (int)lod;
+            if (l0 < 0) l0 = 0;
+            if (l0 > IBL_SPEC_LEVELS - 2) l0 = IBL_SPEC_LEVELS - 2;
+            float t = lod - (float)l0;
+            if (t < 0.f) t = 0.f;
+            if (t > 1.f) t = 1.f;
+
+            float4 c0 = tex2D<float4>(mat.prefiltered[l0], su, sv);
+            float4 c1 = tex2D<float4>(mat.prefiltered[l0 + 1], su, sv);
+            pr = (c0.x + (c1.x - c0.x) * t) * mat.ibl_intensity;
+            pg = (c0.y + (c1.y - c0.y) * t) * mat.ibl_intensity;
+            pb = (c0.z + (c1.z - c0.z) * t) * mat.ibl_intensity;
+        }
     }
 
-    // n.v stands in for v.h here: an ambient lookup has no single half vector,
-    // because the light arrives from the whole hemisphere at once.
-    float kar = (1.0f - brdf_F_schlick_roughness(f0r, ndotv, rough)) * (1.0f - mat.metallic);
-    float kag = (1.0f - brdf_F_schlick_roughness(f0g, ndotv, rough)) * (1.0f - mat.metallic);
-    float kab = (1.0f - brdf_F_schlick_roughness(f0b, ndotv, rough)) * (1.0f - mat.metallic);
+    // The split sum's second factor: the fraction of a white environment the
+    // specular lobe returns. It is linear in F0, so one table of a scale and a
+    // bias covers every material.
+    float far_r, far_g, far_b;
+    if (mat.has_brdf_lut) {
+        float4 ab_lut = tex2D<float4>(mat.brdf_lut, ndotv, rough);
+        far_r = f0r * ab_lut.x + ab_lut.y;
+        far_g = f0g * ab_lut.x + ab_lut.y;
+        far_b = f0b * ab_lut.x + ab_lut.y;
+    } else {
+        // No table: Fresnel alone, which over-reflects at grazing angles. The
+        // specular ambient is dropped rather than guessed, so what this
+        // fallback is really for is keeping the diffuse complement below
+        // meaningful. n.v stands in for v.h, since an ambient lookup has no
+        // single half vector.
+        far_r = brdf_F_schlick_roughness(f0r, ndotv, rough);
+        far_g = brdf_F_schlick_roughness(f0g, ndotv, rough);
+        far_b = brdf_F_schlick_roughness(f0b, ndotv, rough);
+    }
 
-    out.r += kar * ar * er;
-    out.g += kag * ag * eg;
-    out.b += kab * ab * eb;
+    // The diffuse ambient takes exactly what the specular did not. Deriving it
+    // from its own Fresnel approximation instead leaves the pair about 2% over
+    // unity on smooth dielectrics at glancing angles: two approximations of
+    // the same quantity that do not cancel. Written as a complement they
+    // cannot fail to.
+    out.r += (1.0f - far_r) * (1.0f - mat.metallic) * ar * er;
+    out.g += (1.0f - far_g) * (1.0f - mat.metallic) * ag * eg;
+    out.b += (1.0f - far_b) * (1.0f - mat.metallic) * ab * eb;
+
+    if (mat.has_brdf_lut) {
+        out.r += pr * far_r;
+        out.g += pg * far_g;
+        out.b += pb * far_b;
+    }
 
     // Nothing is clamped. The frame has a physical scale now -- a radiance of
     // 2 is twice a radiance of 1 -- and a ceiling here would throw that away

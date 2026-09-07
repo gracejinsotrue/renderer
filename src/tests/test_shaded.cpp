@@ -60,18 +60,102 @@ static float refFresnel(float f0, float coh)
     return f0 + (1.f - f0) * t2 * t2 * t;
 }
 
-static float refFresnelRough(float f0, float nov, float rough)
-{
-    float t = 1.f - nov;
-    float t2 = t * t;
-    float ceiling = std::max(1.f - rough, f0);
-    return f0 + (ceiling - f0) * t2 * t2 * t;
-}
-
 static float refSrgbDecode(float c)
 {
     return (c <= 0.04045f) ? c / 12.92f
                            : std::pow((c + 0.055f) / 1.055f, 2.4f);
+}
+
+// The environment BRDF table, built here rather than read off the GPU. The
+// shader adds a specular ambient term even with no environment loaded -- the
+// fallback is a uniform one -- so a reference without this is short by a
+// fraction of a byte everywhere, and the only way to absorb that is to loosen
+// a threshold, which is how a differential test stops testing.
+//
+// Same integral as the kernel's, arrived at separately: the sample points come
+// from a stride-based golden-ratio sequence rather than a bit-reversal, and
+// the loop carries alpha rather than roughness.
+static const int REF_LUT_N = 64;
+static float ref_lut_a[REF_LUT_N * REF_LUT_N];
+static float ref_lut_b[REF_LUT_N * REF_LUT_N];
+
+static void refBuildEnvLut()
+{
+    const int SAMPLES = 2048;
+    // The golden-ratio additive recurrence. Like Hammersley it is
+    // low-discrepancy, and unlike it, it is not the same sequence.
+    const double GOLDEN = 0.61803398874989484820;
+
+    for (int yi = 0; yi < REF_LUT_N; yi++)
+    {
+        float rough = (yi + 0.5f) / REF_LUT_N;
+        float alpha = rough * rough;
+        for (int xi = 0; xi < REF_LUT_N; xi++)
+        {
+            float nov = (xi + 0.5f) / REF_LUT_N;
+            if (nov < 1e-4f) nov = 1e-4f;
+            float vx = std::sqrt(std::max(0.f, 1.f - nov * nov));
+            float vz = nov;
+
+            // Smith with the k image-based lighting takes, alpha/2.
+            float k = alpha * 0.5f;
+            double sa = 0.0, sb = 0.0;
+            double seq = 0.0;
+            for (int s = 0; s < SAMPLES; s++)
+            {
+                double u1 = (s + 0.5) / SAMPLES;
+                seq += GOLDEN;
+                if (seq >= 1.0) seq -= 1.0;
+                double u2 = seq;
+
+                // Invert the GGX cdf for the polar angle of the half vector.
+                double cos_t = std::sqrt((1.0 - u2) /
+                                         (1.0 + (alpha * alpha - 1.0) * u2));
+                double sin_t = std::sqrt(std::max(0.0, 1.0 - cos_t * cos_t));
+                double phi = 2.0 * REF_PI * u1;
+                double hx = sin_t * std::cos(phi);
+                double hy = sin_t * std::sin(phi);
+                double hz = cos_t;
+
+                double voh = vx * hx + vz * hz;
+                double lz = 2.0 * voh * hz - vz;
+                if (lz <= 0.0) continue;
+
+                double gv = nov / (nov * (1.0 - k) + k);
+                double gl = lz / (lz * (1.0 - k) + k);
+                double gvis = (hz > 1e-8) ? (gv * gl * std::max(0.0, voh))
+                                            / (hz * nov)
+                                          : 0.0;
+                double w = 1.0 - std::max(0.0, voh);
+                double fc = w * w * w * w * w;
+                sa += (1.0 - fc) * gvis;
+                sb += fc * gvis;
+            }
+            ref_lut_a[yi * REF_LUT_N + xi] = (float)(sa / SAMPLES);
+            ref_lut_b[yi * REF_LUT_N + xi] = (float)(sb / SAMPLES);
+        }
+    }
+}
+
+// Bilinear, matching how the GPU reads the texture: normalised coordinates
+// over texel centres, clamped at the edges.
+static void refEnvLut(float nov, float rough, float *a, float *b)
+{
+    float fx = nov * REF_LUT_N - 0.5f;
+    float fy = rough * REF_LUT_N - 0.5f;
+    int x0 = (int)std::floor(fx), y0 = (int)std::floor(fy);
+    float tx = fx - x0, ty = fy - y0;
+    int x1 = x0 + 1, y1 = y0 + 1;
+    auto cl = [](int v) { return v < 0 ? 0 : (v >= REF_LUT_N ? REF_LUT_N - 1 : v); };
+    x0 = cl(x0); x1 = cl(x1); y0 = cl(y0); y1 = cl(y1);
+    auto mix = [&](const float *t) {
+        float v00 = t[y0 * REF_LUT_N + x0], v10 = t[y0 * REF_LUT_N + x1];
+        float v01 = t[y1 * REF_LUT_N + x0], v11 = t[y1 * REF_LUT_N + x1];
+        return (v00 * (1 - tx) + v10 * tx) * (1 - ty) +
+               (v01 * (1 - tx) + v11 * tx) * ty;
+    };
+    *a = mix(ref_lut_a);
+    *b = mix(ref_lut_b);
 }
 
 static int diffPixels(TGAImage &a, TGAImage &b, int *maxDiff, int *significantPixels,
@@ -238,20 +322,29 @@ int main(int argc,char**argv){
 
             // Irradiance of a light whose white-Lambertian response is li.
             float el = li * REF_PI;
-            float ka = 1.f - refFresnelRough(F0, nov, rough);
+
+            // The ambient term, with no environment loaded: the shader treats
+            // that as a uniform one, so both halves of the split sum apply.
+            // The specular half is the table, the diffuse half is whatever it
+            // leaves over.
+            float lutA, lutB;
+            refEnvLut(nov, rough, &lutA, &lutB);
+            float far = F0 * lutA + lutB;
             const float ambient = 0.03f;
 
             float lcv[3] = {lc.x, lc.y, lc.z};
             unsigned char outc[3];
             for (int ch = 0; ch < 3; ch++) {
                 float v = (kd * alb[ch] / REF_PI + spec) * nol * el * lcv[ch]
-                        + ka * alb[ch] * ambient;
+                        + (1.f - far) * alb[ch] * ambient
+                        + far * ambient;
                 outc[ch] = (unsigned char)std::min(255.f, std::max(0.f, v) * 255.f);
             }
             c = TGAColor(outc[0], outc[1], outc[2]);
             return false;
         }
     } sh;
+    refBuildEnvLut();
     sh.mm=&m; sh.x=xf; sh.mit=MITm; sh.L=lv; sh.lc=Vec3f(1,1,1); sh.li=1.0f;
     for(int i=0;i<nf;i++){ Vec4f scv[3]; for(int j=0;j<3;j++) scv[j]=sh.vertex(i,j); triangle(scv, sh, cpu, cpuz); }
 

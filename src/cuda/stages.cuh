@@ -87,6 +87,16 @@ void cudaLaunchEnvReduce(cudaTextureObject_t env, float4* dst,
 void cudaLaunchIrradiance(const float4* src, int src_w, int src_h,
                           float4* dst, int dst_w, int dst_h);
 
+// ibl.cu: the specular half of the split sum. cudaLaunchPrefilter blurs the
+// environment by the GGX lobe of one roughness, once per level;
+// cudaLaunchBrdfLut builds the table of F0 scale and bias, which depends on
+// the BRDF alone and so is built once at startup rather than per environment.
+int cudaPrefilterSrcWidth();
+int cudaPrefilterSrcHeight();
+void cudaLaunchPrefilter(const float4* src, int src_w, int src_h,
+                         float4* dst, int dst_w, int dst_h, float rough);
+void cudaLaunchBrdfLut(float4* dst, int w, int h, int samples);
+
 // resolve.cu: linear radiance -> the 8-bit frame. passthrough skips exposure
 // and the curve for the SSAO debug views, which carry normals and occlusion
 // rather than light and would be misreported by a tone curve.

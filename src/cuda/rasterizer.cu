@@ -76,8 +76,11 @@ static bool uploadTexture(const unsigned char* px, int w, int h, int bpp,
 // one exists to match the CPU sampler on TGA data: it swizzles to BGRA,
 // normalizes to 0..1 and clamps in both axes, none of which an HDR
 // environment wants.
+// wrap_u picks the addressing: an equirectangular map wraps in longitude,
+// a lookup table indexed by two bounded quantities does not.
 static bool uploadFloatTexture(const float* rgba, int w, int h,
-                               cudaArray_t* arr_out, cudaTextureObject_t* tex_out)
+                               cudaArray_t* arr_out, cudaTextureObject_t* tex_out,
+                               bool wrap_u = true)
 {
     if (!rgba || w <= 0 || h <= 0) return false;
     cudaChannelFormatDesc ch = cudaCreateChannelDesc<float4>();
@@ -93,7 +96,7 @@ static bool uploadFloatTexture(const float* rgba, int w, int h,
     cudaTextureDesc td; memset(&td, 0, sizeof(td));
     // u wraps because 0 and 1 are the same meridian; v clamps because the
     // poles are ends, not a seam.
-    td.addressMode[0] = cudaAddressModeWrap;
+    td.addressMode[0] = wrap_u ? cudaAddressModeWrap : cudaAddressModeClamp;
     td.addressMode[1] = cudaAddressModeClamp;
     td.filterMode = cudaFilterModeLinear;
     // not NormalizedFloat: these values are radiance and routinely exceed 1
@@ -185,6 +188,16 @@ private:
     bool has_irr;
     float ibl_intensity;
 
+    // Specular IBL. The prefiltered levels belong to the environment and go
+    // with it; the BRDF table depends only on the BRDF, so it is built once
+    // when the rasterizer is created and survives every environment change.
+    cudaArray_t d_pre_arr[IBL_SPEC_LEVELS];
+    cudaTextureObject_t d_pre_tex[IBL_SPEC_LEVELS];
+    bool has_pre;
+    cudaArray_t d_lut_arr;
+    cudaTextureObject_t d_lut_tex;
+    bool has_lut;
+
     // Metallic-roughness for every mesh in the frame. Per-material in the
     // struct the kernel reads, frame-global here until the loader has
     // somewhere to put a per-model value.
@@ -213,6 +226,7 @@ public:
           tone_enabled(true), tone_passthrough(false),
           d_env_arr(NULL), d_env_tex(0), has_env(false),
           d_irr_arr(NULL), d_irr_tex(0), has_irr(false), ibl_intensity(1.0f),
+          has_pre(false), d_lut_arr(NULL), d_lut_tex(0), has_lut(false),
           pbr_metallic(0.0f), pbr_roughness(0.5f),
           d_draws(NULL), draw_capacity(0), h_draw_faces(0),
           initialized(false),
@@ -221,6 +235,10 @@ public:
         // before the first setEnvironmentView is wrong rather than undefined
         for (int i = 0; i < 16; i++) env_inv_vp.m[i] = (i % 5 == 0) ? 1.f : 0.f;
         for (int i = 0; i < 9; i++) ibl_e2w[i] = (i % 4 == 0) ? 1.f : 0.f;
+        for (int i = 0; i < IBL_SPEC_LEVELS; i++) {
+            d_pre_arr[i] = NULL;
+            d_pre_tex[i] = 0;
+        }
 
         int w = width, h = height;
         tiles_x = (w + TILE_W - 1) / TILE_W;
@@ -295,6 +313,7 @@ public:
             }
         }
         uploadSSAOKernel();
+        buildBrdfLut();
         cudaMemset(d_shadowbuf, 0, (size_t)w * h * sizeof(int));
         resetMaterials();
 
@@ -345,6 +364,11 @@ public:
             cudaFree(d_ssao_vp);
             if (d_hdr_resolved) cudaFree(d_hdr_resolved);
             clearEnvironment();
+            if (d_lut_tex) cudaDestroyTextureObject(d_lut_tex);
+            if (d_lut_arr) cudaFreeArray(d_lut_arr);
+            d_lut_tex = 0;
+            d_lut_arr = NULL;
+            has_lut = false;
             cudaEventDestroy(ev_start);
             cudaEventDestroy(ev_upload);
             cudaEventDestroy(ev_bin);
@@ -825,7 +849,10 @@ public:
         if (!initialized) return false;
         clearEnvironment();
         has_env = uploadFloatTexture(rgba, w, h, &d_env_arr, &d_env_tex);
-        if (has_env) buildIrradiance(w, h);
+        if (has_env) {
+            buildIrradiance(w, h);
+            buildPrefiltered(w, h);
+        }
         return has_env;
     }
 
@@ -857,6 +884,81 @@ public:
         has_irr = uploadFloatTexture(host.data(), iw, ih, &d_irr_arr, &d_irr_tex);
     }
 
+    // The environment BRDF table. Independent of the scene, so this runs once
+    // and the result outlives every environment the user loads.
+    void buildBrdfLut() {
+        if (has_lut) return;
+        const int n = IBL_BRDF_LUT_SIZE;
+        float4* d_lut = NULL;
+        if (cudaMalloc(&d_lut, (size_t)n * n * sizeof(float4)) != cudaSuccess)
+            return;
+        cudaLaunchBrdfLut(d_lut, n, n, IBL_BRDF_LUT_SAMPLES);
+        std::vector<float> host((size_t)n * n * 4);
+        cudaMemcpy(host.data(), d_lut, host.size() * sizeof(float),
+                   cudaMemcpyDeviceToHost);
+        cudaFree(d_lut);
+        // clamped in both axes: n.v and roughness are bounded quantities,
+        // not angles, so there is nothing on the other side to wrap to.
+        has_lut = uploadFloatTexture(host.data(), n, n, &d_lut_arr, &d_lut_tex,
+                                     false);
+    }
+
+    // One blur per roughness level, all from a single reduction of the
+    // environment. Level 0 is roughness 0 -- a mirror, whose lobe is a delta
+    // function -- so it is the reduction itself rather than a convolution of
+    // it, which no amount of sampling would reproduce.
+    void buildPrefiltered(int env_w, int env_h) {
+        clearPrefiltered();
+        const int sw = cudaPrefilterSrcWidth();
+        const int sh = cudaPrefilterSrcHeight();
+
+        float4* d_src = NULL;
+        if (cudaMalloc(&d_src, (size_t)sw * sh * sizeof(float4)) != cudaSuccess)
+            return;
+        cudaLaunchEnvReduce(d_env_tex, d_src, sw, sh, env_w, env_h);
+
+        bool ok = true;
+        for (int lvl = 0; lvl < IBL_SPEC_LEVELS && ok; lvl++) {
+            int lw = IBL_SPEC_W >> lvl, lh = IBL_SPEC_H >> lvl;
+            if (lw < 4) lw = 4;
+            if (lh < 2) lh = 2;
+            float rough = (float)lvl / (float)(IBL_SPEC_LEVELS - 1);
+
+            float4* d_lvl = NULL;
+            if (cudaMalloc(&d_lvl, (size_t)lw * lh * sizeof(float4)) != cudaSuccess) {
+                ok = false;
+                break;
+            }
+            if (lvl == 0)
+                cudaLaunchEnvReduce(d_env_tex, d_lvl, lw, lh, env_w, env_h);
+            else
+                cudaLaunchPrefilter(d_src, sw, sh, d_lvl, lw, lh, rough);
+
+            std::vector<float> host((size_t)lw * lh * 4);
+            cudaMemcpy(host.data(), d_lvl, host.size() * sizeof(float),
+                       cudaMemcpyDeviceToHost);
+            cudaFree(d_lvl);
+            ok = uploadFloatTexture(host.data(), lw, lh,
+                                    &d_pre_arr[lvl], &d_pre_tex[lvl]);
+        }
+        cudaFree(d_src);
+
+        // All or nothing: a partial chain would make the shader's lerp read
+        // an unset texture object, which faults rather than degrades.
+        if (!ok) clearPrefiltered();
+        has_pre = ok;
+    }
+
+    void clearPrefiltered() {
+        for (int i = 0; i < IBL_SPEC_LEVELS; i++) {
+            if (d_pre_tex[i]) cudaDestroyTextureObject(d_pre_tex[i]);
+            if (d_pre_arr[i]) cudaFreeArray(d_pre_arr[i]);
+            d_pre_tex[i] = 0;
+            d_pre_arr[i] = NULL;
+        }
+        has_pre = false;
+    }
+
     void clearEnvironment() {
         if (d_env_tex) cudaDestroyTextureObject(d_env_tex);
         if (d_env_arr) cudaFreeArray(d_env_arr);
@@ -869,6 +971,8 @@ public:
         d_irr_tex = 0;
         d_irr_arr = NULL;
         has_irr = false;
+
+        clearPrefiltered();
     }
 
     // eye -> world rotation for this frame, and how much of the environment's
@@ -962,6 +1066,20 @@ public:
             m.has_irradiance = 1;
             m.ibl_intensity = ibl_intensity;
             for (int i = 0; i < 9; i++) m.e2w[i] = ibl_e2w[i];
+        }
+        if (has_pre) {
+            for (int i = 0; i < IBL_SPEC_LEVELS; i++)
+                m.prefiltered[i] = d_pre_tex[i];
+            m.has_prefiltered = 1;
+            // e2w is needed to reflect into world space even when the
+            // irradiance map is absent, which it never is in practice --
+            // both are built from the same environment.
+            for (int i = 0; i < 9; i++) m.e2w[i] = ibl_e2w[i];
+            m.ibl_intensity = ibl_intensity;
+        }
+        if (has_lut) {
+            m.brdf_lut = d_lut_tex;
+            m.has_brdf_lut = 1;
         }
         // staged, not uploaded: flush() sends the whole table in one memcpy
         h_materials.push_back(m);

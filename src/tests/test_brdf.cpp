@@ -178,6 +178,76 @@ int main()
               "the clamped floor keeps D finite at n.h = 1");
     }
 
+    printf("\n--- split-sum environment BRDF\n");
+    // A and B are the scale and bias applied to F0, so f0*A + B is the total
+    // fraction of a white environment the specular lobe returns. With f0 = 1 --
+    // a perfect mirror, which reflects everything -- that fraction cannot
+    // exceed 1 without the surface manufacturing light. This is the property a
+    // rendered image cannot check: an over-bright reflection looks like an
+    // exposure choice.
+    {
+        bool bounded = true, positive = true;
+        double worst = 0.0;
+        float worst_nv = 0.f, worst_r = 0.f;
+        for (int i = 1; i <= 16; i++)
+        {
+            float nv = i / 16.0f;
+            for (int j = 0; j <= 16; j++)
+            {
+                float r = j / 16.0f;
+                float A, B;
+                brdf_env_integrate(nv, r, 1024, &A, &B);
+                if (A < 0.f || B < 0.f) positive = false;
+                double total = A + B;
+                if (total > worst) { worst = total; worst_nv = nv; worst_r = r; }
+                // 1e-3 of Monte Carlo slack, as below.
+                if (total > 1.0 + 1e-3) bounded = false;
+            }
+        }
+        printf("  peak f0=1 reflectance %.4f at n.v %.3f roughness %.3f\n",
+               worst, worst_nv, worst_r);
+        check(positive, "scale and bias are non-negative everywhere");
+        check(bounded, "a perfect mirror never returns more than it receives");
+    }
+
+    // The shader takes the diffuse ambient as 1 - (F0*A + B), so diffuse and
+    // specular sum to exactly 1 on a white surface by construction. What has
+    // to hold for that construction to be legal is that the complement never
+    // goes negative, across every F0 a material can have -- a dielectric's
+    // 0.04 through a metal's 1.0.
+    {
+        bool ok = true;
+        double worst = 0.0;
+        float worst_f0 = 0.f, worst_nv = 0.f, worst_r = 0.f;
+        const float f0s[] = {0.04f, 0.5f, 1.0f};
+        for (int k = 0; k < 3; k++)
+        {
+            for (int i = 1; i <= 16; i++)
+            {
+                float nv = i / 16.0f;
+                for (int j = 0; j <= 16; j++)
+                {
+                    float r = j / 16.0f;
+                    float A, B;
+                    brdf_env_integrate(nv, r, 1024, &A, &B);
+                    double reflected = f0s[k] * A + B;
+                    if (reflected > worst)
+                    {
+                        worst = reflected;
+                        worst_f0 = f0s[k]; worst_nv = nv; worst_r = r;
+                    }
+                    // 1e-3 of slack for the Monte Carlo estimate itself: at
+                    // roughness 0 the true answer is exactly 1 and 1024
+                    // samples land either side of it.
+                    if (reflected > 1.0 + 1e-3) ok = false;
+                }
+            }
+        }
+        printf("  peak reflected fraction %.6f at f0 %.2f, n.v %.3f, roughness %.3f\n",
+               worst, worst_f0, worst_nv, worst_r);
+        check(ok, "the diffuse complement 1 - (F0*A + B) never goes negative");
+    }
+
     printf("\n--- sRGB decode\n");
     checkNear(srgb_to_linear(0.0f), 0.0, 1e-9, "black stays black");
     checkNear(srgb_to_linear(1.0f), 1.0, 1e-6, "white stays white");

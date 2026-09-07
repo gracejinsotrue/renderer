@@ -204,9 +204,9 @@ void UI::buildLighting(Engine &engine)
     if (ImGui::SliderFloat("Metallic", &metallic, 0.f, 1.f, "%.2f"))
         engine.setMetallic(metallic);
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("A metal has no diffuse response, so all of its\n"
-                          "appearance is reflection. Until specular IBL\n"
-                          "lands, that leaves it dark under an environment.");
+        ImGui::SetTooltip("A metal has no diffuse response: everything it\n"
+                          "shows is reflection, so it takes its appearance\n"
+                          "from the environment rather than from its albedo.");
 
     float roughness = engine.getRoughness();
     if (ImGui::SliderFloat("Roughness", &roughness, 0.f, 1.f, "%.2f"))

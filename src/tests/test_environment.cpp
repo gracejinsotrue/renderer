@@ -363,12 +363,13 @@ int main(int argc, char **argv)
     // number: drop the sin(theta), the divide by pi, or the solid angle, and
     // this lands somewhere else.
     //
-    // The prediction is an upper bound rather than an equality, because the
-    // material model takes a few percent back out. A dielectric reflects
-    // about 4% of what arrives specularly, and that much is not available to
-    // the diffuse lobe; the exact figure follows the viewing angle, which
-    // varies across the patch. Anything outside this window is not Fresnel,
-    // it is a missing factor.
+    // The prediction is a floor rather than an equality. A surface in a
+    // uniform environment returns albedo * L through the diffuse lobe and a
+    // little more through the specular one, which reflects what the diffuse
+    // lobe did not admit: the true answer sits between albedo * L and L, and
+    // approaches the floor as F0 goes to zero. For a dielectric, F0 is 0.04,
+    // so the excess is a few percent of the gap. Anything outside this window
+    // is not Fresnel, it is a missing factor.
     engine.loadEnvironment(UNIFORM_HDR);
     TGAImage fUni = lookFrom(engine, Vec3f(0, 0, 3), "t_env_uni.tga");
     Patch uni = centrePatch(fUni);
@@ -376,11 +377,16 @@ int main(int argc, char **argv)
     float wantR = srgbDecode(ALBEDO_R / 255.f) * UNIFORM_L * 255.f;
     float wantG = srgbDecode(ALBEDO_G / 255.f) * UNIFORM_L * 255.f;
     float wantB = srgbDecode(ALBEDO_B / 255.f) * UNIFORM_L * 255.f;
-    printf("  albedo * L          r=%6.1f g=%6.1f b=%6.1f (less ambient Fresnel)\n",
+    printf("  albedo * L          r=%6.1f g=%6.1f b=%6.1f (the floor)\n",
            wantR, wantG, wantB);
-    check(uni.r > 0.90f * wantR && uni.r <= wantR &&
-          uni.g > 0.90f * wantG && uni.g <= wantG &&
-          uni.b > 0.90f * wantB && uni.b <= wantB,
+    // The ceiling: albedo * L plus 15% of the way to L, which is far more than
+    // a 4% F0 can account for and far less than a missing factor would be.
+    float ceilR = wantR + 0.15f * (UNIFORM_L * 255.f - wantR);
+    float ceilG = wantG + 0.15f * (UNIFORM_L * 255.f - wantG);
+    float ceilB = wantB + 0.15f * (UNIFORM_L * 255.f - wantB);
+    check(uni.r >= wantR - 1.f && uni.r <= ceilR &&
+          uni.g >= wantG - 1.f && uni.g <= ceilG &&
+          uni.b >= wantB - 1.f && uni.b <= ceilB,
           "a constant environment convolves to itself");
 
     // Linearity, which needs no knowledge of the material at all: doubling
