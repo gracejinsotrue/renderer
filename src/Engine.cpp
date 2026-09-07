@@ -17,6 +17,7 @@ Engine::Engine(int winWidth, int winHeight, int renWidth, int renHeight)
       running(false), showStats(true), ssaaFactor(2),
       ssaoEnabled(true), ssaoRadius(0.18f), ssaoIntensity(0.85f), ssaoDebug(0),
       shadowBias(2.0f), exposure(1.0f), iblIntensity(1.0f),
+      pbrMetallic(0.0f), pbrRoughness(0.5f),
       windowWidth(winWidth), windowHeight(winHeight), renderWidth(renWidth), renderHeight(renHeight),
       mouseX(0), mouseY(0), mouseDeltaX(0), mouseDeltaY(0), lastMouseX(0), lastMouseY(0), mousePressed(false),
       cameraRotationX(0.0f), cameraRotationY(0.0f), orbitMode(true)
@@ -338,6 +339,16 @@ void Engine::loadEnvironment(const std::string &filename)
 void Engine::setIBLIntensity(float v)
 {
     iblIntensity = v < 0.f ? 0.f : (v > 8.f ? 8.f : v);
+}
+
+void Engine::setMetallic(float v)
+{
+    pbrMetallic = v < 0.f ? 0.f : (v > 1.f ? 1.f : v);
+}
+
+void Engine::setRoughness(float v)
+{
+    pbrRoughness = v < 0.f ? 0.f : (v > 1.f ? 1.f : v);
 }
 
 void Engine::setExposure(float v)
@@ -977,6 +988,7 @@ void Engine::renderScene()
             for (int c = 0; c < 3; c++)
                 e2w[r * 3 + c] = originalModelView[c][r];
         cudaSetIBL(e2w, iblIntensity);
+        cudaSetMaterialParams(pbrMetallic, pbrRoughness);
     }
 
     // before the early return: present() blits whatever is in device memory,

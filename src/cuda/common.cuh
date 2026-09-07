@@ -93,6 +93,12 @@ struct CudaMaterial {
     // built in world space. The camera rotation is orthonormal, so this is
     // just its transpose.
     float e2w[9];
+    // Metallic-roughness, scalar for the whole mesh. Metals have no diffuse
+    // response and take their Fresnel colour from the albedo; dielectrics
+    // reflect a colourless 4%. Roughness is perceptual, squared to GGX alpha
+    // inside the BRDF.
+    float metallic;
+    float roughness;
 };
 // starting capacity only. the table is uploaded fresh each flush and grown on
 // demand, so there is no cap on how many meshes a frame may draw.

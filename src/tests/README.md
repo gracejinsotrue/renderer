@@ -4,6 +4,7 @@ Small standalone programs that link straight against the built `.o` files. No
 window, no SDL, no interaction. Each one asserts and exits non-zero on failure.
 
     make tests          # regression suite -> tests/bin/
+    make test_brdf      # BRDF properties; no GPU and no model needed
     make test_engine    # end-to-end Engine test (needs SDL2 + the scene graph)
     make test_ssao      # ambient occlusion, same requirements
     make test_ssaa      # supersampling, same requirements
@@ -20,6 +21,7 @@ independent implementation to disagree with.
 
 | program | what it answers |
 |---|---|
+| `test_brdf` | does the microfacet BRDF normalise, conserve energy, and behave at its limits? |
 | `test_cull` | does the CUDA path draw the same pixels the CPU rasterizer does, on a real model? |
 | `test_blit` | is the frame the right way up, and is R at byte 0 for SDL? |
 | `test_mesh` | does GPU-resident geometry match the host staging path exactly? |
@@ -30,6 +32,15 @@ independent implementation to disagree with.
 | `test_ssaa` | does supersampling anti-alias the silhouette without moving, rescaling or blurring the image? |
 | `test_meshcache` | does the Model -> device mesh cache get dropped when Scene::clear() frees the Models? |
 | `test_environment` | does the HDR environment decode, and is it sampled along the view ray rather than pasted on? |
+
+`test_brdf` is the odd one out: it neither renders nor compares, it
+integrates. A differential test is blind to any error both implementations
+make, and a missing normalisation factor or a Fresnel term applied twice is
+exactly the kind of mistake that survives being written a second time by the
+same person. Numerical integration is not: a distribution that does not
+integrate to one is wrong however many implementations agree on it. It also
+needs no CUDA device, so it is the one test that actually asserts something
+in CI rather than skipping.
 
 `test_engine` runs headless via SDL's dummy video driver and steps `render()`
 directly instead of calling `run()`. It is the only test that covers the
@@ -127,7 +138,10 @@ the kernel it is checking. An earlier version copied the kernel's normal
 handling into the reference, which made the two agree by construction and hid
 a real shading bug. If you change how the kernel shades, work out
 independently what the reference should be; never paste the kernel's version
-into it.
+into it. Moving to Cook-Torrance was the first real exercise of that rule:
+the reference was rewritten from the published equations, and it is
+parameterised by GGX alpha where the kernel takes perceptual roughness and
+squares it, so the two do not even share where the square goes.
 
 ## Local tools
 

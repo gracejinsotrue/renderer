@@ -146,9 +146,7 @@ void tiled_raster_kernel(const CudaTriangle* triangles,
                                               pw0, pw1, pw2,
                                               shadowbuf, width, height);
 
-            framebuffer[color_idx] = make_float4(f.r * (1.f / 255.f),
-                                                 f.g * (1.f / 255.f),
-                                                 f.b * (1.f / 255.f), 1.f);
+            framebuffer[color_idx] = make_float4(f.r, f.g, f.b, 1.f);
 
             // eye-space normal for SSAO. indexed like the zbuffer (bottom-up),
             // since that is the space the occlusion pass works in. Unlit and

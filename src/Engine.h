@@ -65,6 +65,7 @@ extern "C"
     // light the shading takes. Diffuse IBL is off until an environment is
     // loaded; loading one builds the irradiance map.
     void cudaSetIBL(const float *e2w9, float intensity);
+    void cudaSetMaterialParams(float metallic, float roughness);
     // linear multiplier applied by the tone map, ahead of the curve
     void cudaSetExposure(float exposure);
     // 0 emits the linear frame scaled to 0..255 with no exposure and no
@@ -163,6 +164,11 @@ private:
     // How much of the environment's irradiance reaches the shading. Has no
     // effect without an environment loaded.
     float iblIntensity;
+
+    // Metallic-roughness, applied to every mesh. A per-model source would
+    // come from the loader; there is none yet, so these are scene-wide.
+    float pbrMetallic;
+    float pbrRoughness;
 
     // Rendering dimensions
     int renderWidth, renderHeight;
@@ -281,6 +287,11 @@ public:
 
     void setIBLIntensity(float v);
     float getIBLIntensity() const { return iblIntensity; }
+
+    void setMetallic(float v);
+    float getMetallic() const { return pbrMetallic; }
+    void setRoughness(float v);
+    float getRoughness() const { return pbrRoughness; }
 };
 
 #endif // __ENGINE_H__

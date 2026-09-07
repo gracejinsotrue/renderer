@@ -198,6 +198,24 @@ void UI::buildLighting(Engine &engine)
         ImGui::SetTooltip("How much of the environment's irradiance reaches\n"
                           "the shading. No effect without one loaded.");
 
+    ImGui::SeparatorText("Surface");
+
+    float metallic = engine.getMetallic();
+    if (ImGui::SliderFloat("Metallic", &metallic, 0.f, 1.f, "%.2f"))
+        engine.setMetallic(metallic);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("A metal has no diffuse response, so all of its\n"
+                          "appearance is reflection. Until specular IBL\n"
+                          "lands, that leaves it dark under an environment.");
+
+    float roughness = engine.getRoughness();
+    if (ImGui::SliderFloat("Roughness", &roughness, 0.f, 1.f, "%.2f"))
+        engine.setRoughness(roughness);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Ignored where a specular map supplies it: those\n"
+                          "hold a Phong exponent, converted to the GGX lobe\n"
+                          "of the same width.");
+
     ImGui::SeparatorText("Directional light");
 
     Light &light = engine.getScene().light;

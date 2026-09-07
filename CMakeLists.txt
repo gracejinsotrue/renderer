@@ -260,6 +260,13 @@ if(BUILD_TESTING_RENDERER)
   set(OPTIONAL_TOOLS test_wind bench bench_cull bench_tile profile_frame
                      render_png bench_meshes capture_scene bench_overdraw)
 
+  # Needs neither a GPU nor a model: it integrates the BRDF functions on the
+  # host and checks the result against their definitions, so it is the one
+  # test that actually asserts something on a CI runner with no device.
+  add_executable(test_brdf src/tests/test_brdf.cpp)
+  target_include_directories(test_brdf PRIVATE ${CMAKE_SOURCE_DIR}/src)
+  add_test(NAME test_brdf COMMAND test_brdf)
+
   foreach(_t IN LISTS CORE_TESTS)
     add_executable(${_t} src/tests/${_t}.cpp ${REFERENCE_RASTER})
     target_include_directories(${_t} PRIVATE ${CMAKE_SOURCE_DIR}/src/tests)

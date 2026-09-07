@@ -168,6 +168,7 @@ static const char *FLAT_HDR = "t_env_flat.hdr";
 static const char *RLE_HDR = "t_env_rle.hdr";
 static const char *UNIFORM_HDR = "t_env_uniform.hdr";
 static const char *HALF_HDR = "t_env_half.hdr";
+static const char *DOUBLE_HDR = "t_env_double.hdr";
 
 static const float UNIFORM_L = 0.5f;
 // bright over the +X hemisphere, near-dark over -X
@@ -175,7 +176,8 @@ static const float HALF_HI = 2.0f;
 static const float HALF_LO = 0.02f;
 
 // kind 0: constant UNIFORM_L. kind 1: split by the sign of the x component of
-// the direction each texel stands for.
+// the direction each texel stands for. kind 2: constant 2*UNIFORM_L, which
+// exists only so the response to it can be divided by the response to kind 0.
 static bool writeIBLMap(const char *path, int kind)
 {
     const int W = 64, H = 32;
@@ -187,6 +189,8 @@ static bool writeIBLMap(const char *path, int kind)
             float rgb[3];
             if (kind == 0) {
                 rgb[0] = rgb[1] = rgb[2] = UNIFORM_L;
+            } else if (kind == 2) {
+                rgb[0] = rgb[1] = rgb[2] = 2.f * UNIFORM_L;
             } else {
                 float phi = ((x + 0.5f) / W - 0.5f) * 2.f * 3.14159265f;
                 float theta = (y + 0.5f) / H * 3.14159265f;
@@ -203,8 +207,19 @@ static bool writeIBLMap(const char *path, int kind)
 }
 
 // The colour renderScene gives an untextured mesh, which is the albedo the
-// irradiance below is multiplied by.
+// irradiance below is multiplied by. Bytes, as a display would show them:
+// the shader decodes them out of sRGB before lighting them, so the linear
+// albedo that reaches the arithmetic is the decode of these over 255.
 static const float ALBEDO_R = 200.f, ALBEDO_G = 170.f, ALBEDO_B = 150.f;
+
+// Written out here rather than shared with the shader on purpose: this is
+// the reference the render is checked against, and a reference that calls
+// the code under test cannot disagree with it.
+static float srgbDecode(float c)
+{
+    return (c <= 0.04045f) ? c / 12.92f
+                           : powf((c + 0.055f) / 1.055f, 2.4f);
+}
 
 int main(int argc, char **argv)
 {
@@ -327,13 +342,15 @@ int main(int argc, char **argv)
     // direct light at zero and no occlusion, so what lands in the frame is the
     // irradiance term alone and can be predicted rather than eyeballed.
     printf("\n--- diffuse irradiance\n");
-    if (!writeIBLMap(UNIFORM_HDR, 0) || !writeIBLMap(HALF_HDR, 1)) {
+    if (!writeIBLMap(UNIFORM_HDR, 0) || !writeIBLMap(HALF_HDR, 1) ||
+        !writeIBLMap(DOUBLE_HDR, 2)) {
         printf("could not write the IBL maps\n");
         cleanup();
         return 1;
     }
     written.push_back(UNIFORM_HDR);
     written.push_back(HALF_HDR);
+    written.push_back(DOUBLE_HDR);
 
     cudaSetToneMapping(0);
     engine.getScene().light.intensity = 0.f;
@@ -345,16 +362,43 @@ int main(int argc, char **argv)
     // albedo * L. That is the whole normalisation of the convolution in one
     // number: drop the sin(theta), the divide by pi, or the solid angle, and
     // this lands somewhere else.
+    //
+    // The prediction is an upper bound rather than an equality, because the
+    // material model takes a few percent back out. A dielectric reflects
+    // about 4% of what arrives specularly, and that much is not available to
+    // the diffuse lobe; the exact figure follows the viewing angle, which
+    // varies across the patch. Anything outside this window is not Fresnel,
+    // it is a missing factor.
     engine.loadEnvironment(UNIFORM_HDR);
     TGAImage fUni = lookFrom(engine, Vec3f(0, 0, 3), "t_env_uni.tga");
     Patch uni = centrePatch(fUni);
     report("uniform L=0.5", uni);
-    printf("  expected            r=%6.1f g=%6.1f b=%6.1f\n",
-           ALBEDO_R * UNIFORM_L, ALBEDO_G * UNIFORM_L, ALBEDO_B * UNIFORM_L);
-    check(fabsf(uni.r - ALBEDO_R * UNIFORM_L) < 5.f &&
-          fabsf(uni.g - ALBEDO_G * UNIFORM_L) < 5.f &&
-          fabsf(uni.b - ALBEDO_B * UNIFORM_L) < 5.f,
+    float wantR = srgbDecode(ALBEDO_R / 255.f) * UNIFORM_L * 255.f;
+    float wantG = srgbDecode(ALBEDO_G / 255.f) * UNIFORM_L * 255.f;
+    float wantB = srgbDecode(ALBEDO_B / 255.f) * UNIFORM_L * 255.f;
+    printf("  albedo * L          r=%6.1f g=%6.1f b=%6.1f (less ambient Fresnel)\n",
+           wantR, wantG, wantB);
+    check(uni.r > 0.90f * wantR && uni.r <= wantR &&
+          uni.g > 0.90f * wantG && uni.g <= wantG &&
+          uni.b > 0.90f * wantB && uni.b <= wantB,
           "a constant environment convolves to itself");
+
+    // Linearity, which needs no knowledge of the material at all: doubling
+    // every texel of the environment has to double the irradiance, and every
+    // factor the prediction above had to reason about divides out. This is the
+    // exact half of the anchor -- the bound above pins the constant, this pins
+    // the proportionality.
+    engine.loadEnvironment(DOUBLE_HDR);
+    TGAImage fDbl = lookFrom(engine, Vec3f(0, 0, 3), "t_env_dbl.tga");
+    Patch dbl = centrePatch(fDbl);
+    report("uniform L=1.0", dbl);
+    float ratio = (uni.r > 1.f) ? dbl.r / uni.r : 0.f;
+    printf("  ratio to L=0.5      %.4f\n", ratio);
+    // 5%, because the frame is bytes: at a patch mean near 70 a single level
+    // is already 1.4% of the ratio, and the RGBE encoding of the map itself
+    // quantises to a 8-bit mantissa before any of this.
+    check(fabsf(ratio - 2.f) < 0.05f,
+          "doubling the environment doubles the irradiance");
 
     // With the light in one hemisphere, what the centre of the frame shows
     // depends on which way the surface there faces in WORLD space. Orbiting

@@ -74,13 +74,9 @@ void deferred_shade_kernel(const CudaTriangle* triangles,
 
     // the frame is stored top-down; everything above is bottom-up
     int color_idx = (height - 1 - y) * width + x;
-    // shade_fragment still works in 0..255 because the shading model has no
-    // HDR inputs yet: one directional light, textures read as 0..1. Scaling
-    // to 0..1 here puts it on the same footing as the environment, which is
-    // real radiance, so the tone map sees one space rather than two.
-    framebuffer[color_idx] = make_float4(f.r * (1.f / 255.f),
-                                         f.g * (1.f / 255.f),
-                                         f.b * (1.f / 255.f), 1.f);
+    // Linear radiance, the same space the environment backdrop is written
+    // in, so the tone map at the end sees one scale rather than two.
+    framebuffer[color_idx] = make_float4(f.r, f.g, f.b, 1.f);
 
     if (normalbuf && f.has_normal) {
         normalbuf[pixel_idx * 3 + 0] = f.gnx;

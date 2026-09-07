@@ -16,6 +16,7 @@
 
 #include <cmath>
 
+#include "brdf.cuh"
 #include "common.cuh"
 
 __device__ inline
@@ -43,7 +44,11 @@ CudaVec3 cuda_barycentric(float ax, float ay, float bx, float by,
 }
 
 struct ShadedFragment {
-    float r, g, b;          // 0..255, already clamped
+    // Linear radiance leaving the surface toward the eye. 1.0 is the white
+    // point -- a white Lambertian surface facing a unit light -- and values
+    // above it are legal and expected: a sun in an environment map is worth
+    // tens of these. Clamping is the tone map's job, at the end of the frame.
+    float r, g, b;
     float gnx, gny, gnz;    // geometric (unmapped) eye-space normal, for SSAO
     // Unlit and shadow-debug fragments have no meaningful normal to hand the
     // occlusion pass, and the forward path skipped the normal write for both.
@@ -72,7 +77,13 @@ ShadedFragment shade_fragment(const CudaTriangle& tri, const CudaMaterial& mat,
     // uvs, so it opts out of shading and its colour passes straight
     // through, which is the contract the tests rely on.
     if (mat.unlit) {
-        out.r = tri.color.r; out.g = tri.color.g; out.b = tri.color.b;
+        // Straight through, only rescaled: these bytes are a colour the caller
+        // chose, not a measurement of light, so no transfer curve is undone
+        // here and none is applied on the way out (the tests that use this
+        // path run with the tone map off).
+        out.r = tri.color.r * (1.f / 255.f);
+        out.g = tri.color.g * (1.f / 255.f);
+        out.b = tri.color.b * (1.f / 255.f);
         return out;
     }
 
@@ -163,40 +174,108 @@ ShadedFragment shade_fragment(const CudaTriangle& tri, const CudaMaterial& mat,
             // regardless of world scale.
             shadow = (sz + bias_eff >= stored) ? 1.0f : 0.3f;
             if (mat.debug_shadow) {
-                out.r = fminf(fmaxf(sz, 0.f), 255.f);
-                out.g = fminf(fmaxf(stored, 0.f), 255.f);
+                // Depths, not light: 0..255 rescaled to the buffer's range so
+                // the passthrough path writes them back unchanged.
+                out.r = fminf(fmaxf(sz, 0.f), 255.f) * (1.f / 255.f);
+                out.g = fminf(fmaxf(stored, 0.f), 255.f) * (1.f / 255.f);
                 out.b = 0.f;
                 return out;
             }
         }
     }
 
-    // reflected direction, for the specular lobe
-    float rd = 2.0f * (nxi*mat.lx + nyi*mat.ly + nzi*mat.lz);
-    float rz = nzi * rd - mat.lz;
-    float spec = 0.0f;
-    if (mat.has_spec && rz > 0.0f) {
+    // The view direction, eye space. Taken as +Z for every fragment: exact
+    // under an orthographic view, and off by half the field of view at the
+    // corners of a perspective one. Correcting it needs the fragment's
+    // eye-space position, which neither path carries -- the visibility buffer
+    // stores a triangle and a depth, not a position. The Phong lobe this
+    // replaced made the same assumption.
+    float ndotv = nzi;
+    // Half vector between L and V=(0,0,1).
+    float hx = mat.lx, hy = mat.ly, hz = mat.lz + 1.0f;
+    float hl = sqrtf(hx*hx + hy*hy + hz*hz);
+    if (hl > 1e-12f) { hx /= hl; hy /= hl; hz /= hl; }
+    float ndoth = nxi*hx + nyi*hy + nzi*hz;
+    float vdoth = hz;
+
+    if (ndotv < 0.0f) ndotv = 0.0f;
+    if (ndoth < 0.0f) ndoth = 0.0f;
+    if (vdoth < 0.0f) vdoth = 0.0f;
+
+    // Roughness. A specular map, where there is one, holds a Phong exponent;
+    // p and GGX alpha describe the same lobe width at alpha^2 = 2/(p+2)
+    // (Walter et al. 2007, eq. 42), so the maps that ship with the older
+    // models keep meaning what they meant. The material scalar covers
+    // everything without one.
+    float rough = mat.roughness;
+    if (mat.has_spec) {
         float p = tex2D<float4>(mat.spec, uu, vv).x * 255.0f;
         if (p < 1.0f) p = 1.0f;
-        spec = powf(rz, p);
+        rough = sqrtf(sqrtf(2.0f / (p + 2.0f)));
     }
+    rough = brdf_clamp_roughness(rough);
 
-    float br = tri.color.r, bg = tri.color.g, bb = tri.color.b;
+    // Albedo, decoded out of sRGB. A texture is authored to look right on a
+    // display, so its bytes are already through a transfer curve; multiplying
+    // them by light without undoing it lights the encoding rather than the
+    // surface, and darkens midtones by about a factor of two once the tone map
+    // puts the curve back. Vertex colours are treated the same way, since they
+    // are picked by eye against the same displays.
+    float ar = tri.color.r * (1.f / 255.f);
+    float ag = tri.color.g * (1.f / 255.f);
+    float ab = tri.color.b * (1.f / 255.f);
     if (mat.has_diffuse) {
         float4 d = tex2D<float4>(mat.diffuse, uu, vv);
-        br = d.z * 255.0f; bg = d.y * 255.0f; bb = d.x * 255.0f;
+        ar = d.z; ag = d.y; ab = d.x;
     }
+    ar = srgb_to_linear(ar);
+    ag = srgb_to_linear(ag);
+    ab = srgb_to_linear(ab);
 
-    // Ambient. Without an environment this is the flat grey it has always
-    // been, which tests/test_shaded.cpp checks against an independently
-    // derived CPU reference.
+    // Reflectance at normal incidence. Dielectrics reflect a colourless 4%
+    // and keep their albedo for the diffuse lobe; metals reflect their albedo
+    // and have no diffuse lobe at all. Metallic interpolates because a texel
+    // can straddle the boundary, not because anything is physically in
+    // between.
+    float f0r = 0.04f + (ar - 0.04f) * mat.metallic;
+    float f0g = 0.04f + (ag - 0.04f) * mat.metallic;
+    float f0b = 0.04f + (ab - 0.04f) * mat.metallic;
+
+    // Direct light. lintensity is the radiance a white Lambertian surface
+    // facing the light would return, so the irradiance it stands for is that
+    // times pi -- which is the factor the Lambert BRDF's 1/pi then takes back
+    // out. Written this way so the existing default intensity and exposure
+    // still mean what they did.
+    float el = shadow * mat.lintensity * BRDF_PI;
+
+    float sr = brdf_specular(ndotv, diff, ndoth, vdoth, rough, f0r);
+    float sg = brdf_specular(ndotv, diff, ndoth, vdoth, rough, f0g);
+    float sb = brdf_specular(ndotv, diff, ndoth, vdoth, rough, f0b);
+
+    // What Fresnel reflects is not available to refract, and a metal refracts
+    // nothing regardless.
+    float kdr = (1.0f - brdf_F_schlick(f0r, vdoth)) * (1.0f - mat.metallic);
+    float kdg = (1.0f - brdf_F_schlick(f0g, vdoth)) * (1.0f - mat.metallic);
+    float kdb = (1.0f - brdf_F_schlick(f0b, vdoth)) * (1.0f - mat.metallic);
+
+    const float INV_PI = 1.0f / BRDF_PI;
+    out.r = (kdr * ar * INV_PI + sr) * diff * el * mat.lcr;
+    out.g = (kdg * ag * INV_PI + sg) * diff * el * mat.lcg;
+    out.b = (kdb * ab * INV_PI + sb) * diff * el * mat.lcb;
+
+    // Ambient, as irradiance over pi -- the same quantity the irradiance map
+    // stores, which is what lets the two cases share one expression. No
+    // environment is a uniform one: constant radiance in every direction
+    // convolves to E/pi equal to that same constant, so the fallback is a
+    // number rather than a second code path.
     //
-    // With one, it becomes albedo times the irradiance arriving along the
-    // normal, which is what makes an object take colour from its
-    // surroundings. The mapped normal is used, not the geometric one: unlike
-    // the SSAO hemisphere, a lookup has nothing to be tilted into.
-    float amb_r = 20.0f, amb_g = 20.0f, amb_b = 20.0f;
+    // AMBIENT_L is dim on purpose. It exists so an unlit side is not pure
+    // black, and anything brighter starts competing with the light.
+    const float AMBIENT_L = 0.03f;
+    float er = AMBIENT_L, eg = AMBIENT_L, eb = AMBIENT_L;
     if (mat.has_irradiance) {
+        // The mapped normal is used, not the geometric one: unlike the SSAO
+        // hemisphere, a texture lookup has nothing to be tilted into.
         const float* M = mat.e2w;
         float wx = M[0]*nxi + M[1]*nyi + M[2]*nzi;
         float wy = M[3]*nxi + M[4]*nyi + M[5]*nzi;
@@ -207,29 +286,27 @@ ShadedFragment shade_fragment(const CudaTriangle& tri, const CudaMaterial& mat,
         float iu, iv;
         equirect_uv(wx, wy, wz, &iu, &iv);
         float4 E = tex2D<float4>(mat.irradiance, iu, iv);
-        // the map holds E/pi, so albedo is the only other factor
-        amb_r = br * E.x * mat.ibl_intensity;
-        amb_g = bg * E.y * mat.ibl_intensity;
-        amb_b = bb * E.z * mat.ibl_intensity;
+        er = E.x * mat.ibl_intensity;
+        eg = E.y * mat.ibl_intensity;
+        eb = E.z * mat.ibl_intensity;
     }
 
-    float lit = shadow * mat.lintensity * (0.8f * diff + 0.3f * spec);
-    out.r = amb_r + br * lit * mat.lcr;
-    out.g = amb_g + bg * lit * mat.lcg;
-    out.b = amb_b + bb * lit * mat.lcb;
+    // n.v stands in for v.h here: an ambient lookup has no single half vector,
+    // because the light arrives from the whole hemisphere at once.
+    float kar = (1.0f - brdf_F_schlick_roughness(f0r, ndotv, rough)) * (1.0f - mat.metallic);
+    float kag = (1.0f - brdf_F_schlick_roughness(f0g, ndotv, rough)) * (1.0f - mat.metallic);
+    float kab = (1.0f - brdf_F_schlick_roughness(f0b, ndotv, rough)) * (1.0f - mat.metallic);
 
-    // Clipped at white only without an environment. There, 255 is "fully lit"
-    // by definition and nothing above it means anything, so the ceiling costs
-    // nothing. An environment gives the frame a real scale -- irradiance of 2
-    // is twice irradiance of 1 -- and clipping there throws that away: a sky
-    // bright enough to push albedo past white flattens every surface to the
-    // same 255 and the object loses its form entirely. Past this point the
-    // range is the tone map's to deal with.
-    if (!mat.has_irradiance) {
-        out.r = fminf(out.r, 255.0f);
-        out.g = fminf(out.g, 255.0f);
-        out.b = fminf(out.b, 255.0f);
-    }
+    out.r += kar * ar * er;
+    out.g += kag * ag * eg;
+    out.b += kab * ab * eb;
+
+    // Nothing is clamped. The frame has a physical scale now -- a radiance of
+    // 2 is twice a radiance of 1 -- and a ceiling here would throw that away
+    // before the tone map, which is the stage that owns the range, ever saw
+    // it. A sky bright enough to push a surface past white would otherwise
+    // flatten every such surface to the same value and cost the object its
+    // form.
 
     out.gnx = gnx; out.gny = gny; out.gnz = gnz;
     out.has_normal = true;

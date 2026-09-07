@@ -23,6 +23,57 @@ extern "C" {
     void cudaRenderShadowPass();
 }
 
+// The reference BRDF, transcribed from the published equations rather than
+// from src/cuda/brdf.cuh. tests/README.md is explicit about why, and this is
+// the case it was written for: a reference copied out of the kernel agrees
+// with the kernel by construction and cannot fail.
+//
+// Whether these formulas are individually right is not this test's question --
+// tests/test_brdf.cpp answers that by integrating them. What this test asks is
+// whether the GPU pipeline hands them the same arguments the CPU does:
+// perspective-correct interpolation, the normal map through the
+// inverse-transpose, the material table, and the two shading paths.
+//
+// Parameterised by alpha directly, where the kernel takes perceptual
+// roughness and squares it internally. Same lobe, different place to put the
+// square, which is the point.
+static const float REF_PI = 3.14159265358979323846f;
+
+static float refGGX(float noh, float alpha)
+{
+    float a2 = alpha * alpha;
+    float t = noh * noh * (a2 - 1.f) + 1.f;
+    return a2 / (REF_PI * t * t);
+}
+
+static float refSmithG(float nov, float nol, float k)
+{
+    float gv = nov / (nov * (1.f - k) + k);
+    float gl = nol / (nol * (1.f - k) + k);
+    return gv * gl;
+}
+
+static float refFresnel(float f0, float coh)
+{
+    float t = 1.f - coh;
+    float t2 = t * t;
+    return f0 + (1.f - f0) * t2 * t2 * t;
+}
+
+static float refFresnelRough(float f0, float nov, float rough)
+{
+    float t = 1.f - nov;
+    float t2 = t * t;
+    float ceiling = std::max(1.f - rough, f0);
+    return f0 + (ceiling - f0) * t2 * t2 * t;
+}
+
+static float refSrgbDecode(float c)
+{
+    return (c <= 0.04045f) ? c / 12.92f
+                           : std::pow((c + 0.055f) / 1.055f, 2.4f);
+}
+
 static int diffPixels(TGAImage &a, TGAImage &b, int *maxDiff, int *significantPixels,
                       double *meanAbs)
 {
@@ -152,15 +203,52 @@ int main(int argc,char**argv){
             Vec3f on = mm->normal(uv);
             Vec3f en = proj<3>(mit*embed<4>(on, 0.f));
             if (en.norm()>1e-12f) { en = en.normalize(); e = en; }
-            float diff = std::max(0.f, e*L);
-            float rz = e.z*(2.f*(e*L)) - L.z;
-            float spec = 0.f;
-            if (rz>0.f) { float p = mm->specular(uv); if(p<1.f)p=1.f; spec = std::pow(rz, p); }
+            // The view direction the kernel assumes: +Z for every fragment,
+            // which is exact only under an orthographic view. The reference
+            // has to make the same assumption or it is testing the projection
+            // rather than the shading.
+            Vec3f V(0.f, 0.f, 1.f);
+            Vec3f H = (L + V).normalize();
+            float nov = std::max(0.f, e.z);
+            float nol = std::max(0.f, e*L);
+            float noh = std::max(0.f, e*H);
+            float voh = std::max(0.f, V*H);
+
+            // The specular map holds a Phong exponent; alpha^2 = 2/(p+2) is
+            // the lobe of equal width.
+            float p = mm->specular(uv);
+            if (p < 1.f) p = 1.f;
+            float alpha = std::sqrt(2.f / (p + 2.f));
+            float rough = std::sqrt(alpha);
+            if (rough < 0.045f) { rough = 0.045f; alpha = rough * rough; }
+            float k = (rough + 1.f) * (rough + 1.f) / 8.f;
+
             TGAColor t = mm->diffuse(uv);
-            float lit = 0.8f*diff + 0.3f*spec;
-            c = TGAColor((unsigned char)std::min(255.f, 20.f+t[2]*lit*lc.x*li),
-                         (unsigned char)std::min(255.f, 20.f+t[1]*lit*lc.y*li),
-                         (unsigned char)std::min(255.f, 20.f+t[0]*lit*lc.z*li));
+            // Dielectric: metallic is 0 here, so F0 is the colourless 4% and
+            // the whole albedo stays available to the diffuse lobe.
+            const float F0 = 0.04f;
+            float alb[3];
+            for (int ch = 0; ch < 3; ch++) alb[ch] = refSrgbDecode(t[2-ch] / 255.f);
+
+            float spec = 0.f;
+            if (nov > 0.f && nol > 0.f)
+                spec = refGGX(noh, alpha) * refSmithG(nov, nol, k)
+                     * refFresnel(F0, voh) / (4.f * nov * nol);
+            float kd = 1.f - refFresnel(F0, voh);
+
+            // Irradiance of a light whose white-Lambertian response is li.
+            float el = li * REF_PI;
+            float ka = 1.f - refFresnelRough(F0, nov, rough);
+            const float ambient = 0.03f;
+
+            float lcv[3] = {lc.x, lc.y, lc.z};
+            unsigned char outc[3];
+            for (int ch = 0; ch < 3; ch++) {
+                float v = (kd * alb[ch] / REF_PI + spec) * nol * el * lcv[ch]
+                        + ka * alb[ch] * ambient;
+                outc[ch] = (unsigned char)std::min(255.f, std::max(0.f, v) * 255.f);
+            }
+            c = TGAColor(outc[0], outc[1], outc[2]);
             return false;
         }
     } sh;
@@ -180,11 +268,18 @@ int main(int argc,char**argv){
 
     // meanAbs counts every pixel that differs at all, including by one LSB,
     // so it tracks how much of the model is textured more than how far the
-    // two rasterizers disagree. It rose from 0.04 to 0.06 when the backface
-    // cull sign was fixed, because the correct surface is the detailed front
-    // one rather than the smooth interior. `significant` is the real check:
-    // pixels off by more than 8 in any channel, of which there are 2.
-    bool ok = significant <= 64 && meanAbs <= 0.08 && maxDiff <= 96;
+    // two rasterizers disagree. `significant` is the real check: pixels off by
+    // more than 8 in any channel, of which there is 1.
+    //
+    // These are tighter than the numbers the Phong version carried (64 / 0.08
+    // / 96 against an observed 2 / 0.06 / 20). Not because anything was
+    // loosened or tuned: the microfacet BRDF has no pow(rz, p) in it, and that
+    // exponent was where the two paths used to diverge -- at p = 255 a
+    // last-place difference in rz becomes a visible one in the result. The
+    // headroom is deliberate all the same. Do not close it to fit a
+    // measurement; a threshold set to whatever the last run produced fails on
+    // the next driver.
+    bool ok = significant <= 16 && meanAbs <= 0.06 && maxDiff <= 48;
     printf("\n%s\n", ok ? "PASS - shaded CPU and CUDA outputs remain close"
                             : "FAIL - shaded CPU and CUDA outputs drifted too far apart");
     cleanupCudaRasterizer();

@@ -184,6 +184,12 @@ private:
     cudaTextureObject_t d_irr_tex;
     bool has_irr;
     float ibl_intensity;
+
+    // Metallic-roughness for every mesh in the frame. Per-material in the
+    // struct the kernel reads, frame-global here until the loader has
+    // somewhere to put a per-model value.
+    float pbr_metallic;
+    float pbr_roughness;
     float ibl_e2w[9];
 
     // per-stage GPU timing. nsys can't get a GPU timeline through WSL2 and
@@ -207,6 +213,7 @@ public:
           tone_enabled(true), tone_passthrough(false),
           d_env_arr(NULL), d_env_tex(0), has_env(false),
           d_irr_arr(NULL), d_irr_tex(0), has_irr(false), ibl_intensity(1.0f),
+          pbr_metallic(0.0f), pbr_roughness(0.5f),
           d_draws(NULL), draw_capacity(0), h_draw_faces(0),
           initialized(false),
           stat_submitted(0), stat_culled_back(0), stat_culled_offscreen(0) {
@@ -872,6 +879,11 @@ public:
         ibl_intensity = intensity > 0.f ? intensity : 0.f;
     }
 
+    void setMaterialParams(float metallic, float roughness) {
+        pbr_metallic  = fminf(fmaxf(metallic, 0.f), 1.f);
+        pbr_roughness = fminf(fmaxf(roughness, 0.f), 1.f);
+    }
+
     void setEnvironmentView(const float* inv16) {
         if (inv16)
             for (int i = 0; i < 16; i++) env_inv_vp.m[i] = inv16[i];
@@ -933,6 +945,8 @@ public:
         m.lcg = light_rgb3 ? fmaxf(light_rgb3[1], 0.0f) : 1.0f;
         m.lcb = light_rgb3 ? fmaxf(light_rgb3[2], 0.0f) : 1.0f;
         m.lintensity = fmaxf(light_intensity, 0.0f);
+        m.metallic = pbr_metallic;
+        m.roughness = pbr_roughness;
         if (mshadow16) {
             m.has_shadow = 1;
             m.shadow_bias = shadow_bias;
@@ -1070,6 +1084,12 @@ extern "C" {
                             int w, int h, int bpp) {
         if (g_cuda_rasterizer)
             g_cuda_rasterizer->setMeshTexture(handle, slot, px, w, h, bpp);
+    }
+    // metallic 0..1, roughness 0..1 perceptual. Applies to every mesh drawn
+    // after it, which is all of them: there is no per-model source yet.
+    void cudaSetMaterialParams(float metallic, float roughness) {
+        if (g_cuda_rasterizer)
+            g_cuda_rasterizer->setMaterialParams(metallic, roughness);
     }
     void cudaSetEnvironment(const float* rgba, int w, int h) {
         if (g_cuda_rasterizer) g_cuda_rasterizer->setEnvironment(rgba, w, h);

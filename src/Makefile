@@ -81,6 +81,12 @@ tests: $(TESTOBJS)
 	done
 	@echo "built: $(TESTS) -> tests/bin/"
 
+# Host-only: no CUDA objects and no model, because it checks the BRDF
+# functions by integrating them rather than by rendering anything.
+test_brdf:
+	mkdir -p tests/bin
+	$(CXX) $(CXXFLAGS) -I. -Itests -o tests/bin/test_brdf tests/test_brdf.cpp
+
 tools: $(TESTOBJS)
 	mkdir -p tests/bin
 	for t in $(TOOLS); do \
@@ -155,7 +161,7 @@ setup:
 capture-rotation: $(TARGET)
 	./$(TARGET) --capture-sequence rotation 360 10.0
 
-.PHONY: all tests test_engine test_ssao test_ssaa test_meshcache clean install-deps install-deps-mac run debug setup capture-rotation
+.PHONY: all tests test_brdf test_engine test_ssao test_ssaa test_meshcache clean install-deps install-deps-mac run debug setup capture-rotation
 
 # header dependencies come from -MMD -MP via $(DEPS); there is no hand-written
 # list to keep in sync.
