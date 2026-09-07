@@ -51,9 +51,15 @@ public:
     // re-register the PBO with CUDA.
     bool resize(int frameWidth, int frameHeight);
 
-    // One frame. Uploads by the current mode, then draws the quad letterboxed
-    // into the window and swaps.
-    void present();
+    // One frame, up to but not including the swap: uploads by the current
+    // mode, then draws the quad letterboxed into the window. Split from swap()
+    // so an overlay can be drawn over the frame in the same buffer.
+    void drawFrame();
+    void swap();
+
+    // For an overlay that needs the context, such as the UI. Null when there
+    // is none, which is the headless case.
+    SDL_GLContext getContext() const { return context; }
 
     // Milliseconds spent getting the frame into the texture, which is the only
     // part the two modes do differently. Excludes the quad and the swap.

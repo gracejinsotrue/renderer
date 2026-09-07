@@ -48,3 +48,7 @@ CMakeUserPresets.json
 *.ncu-rep
 *.qdstrm
 *.sqlite
+
+# A test environment map dropped in the working directory. Disposable, and
+# any CC0 .hdr renamed to this works; the renderer looks for it by name.
+environment.hdr

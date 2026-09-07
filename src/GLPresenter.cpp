@@ -274,7 +274,7 @@ void GLPresenter::drawQuad()
     glEnd();
 }
 
-void GLPresenter::present()
+void GLPresenter::drawFrame()
 {
     if (!context) return;
 
@@ -284,5 +284,9 @@ void GLPresenter::present()
     last_upload_ms = msSince(t0);
 
     drawQuad();
-    SDL_GL_SwapWindow(window);
+}
+
+void GLPresenter::swap()
+{
+    if (context) SDL_GL_SwapWindow(window);
 }

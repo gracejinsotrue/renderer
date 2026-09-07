@@ -160,11 +160,34 @@ set_target_properties(render_core PROPERTIES
   POSITION_INDEPENDENT_CODE ON)
 
 # ---------------------------------------------------------------------------
+# imgui: vendored in third_party/, built as its own target so its warnings
+# stay out of ours and project_flags does not apply to it.
+# ---------------------------------------------------------------------------
+
+set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/third_party/imgui)
+
+add_library(imgui STATIC
+  ${IMGUI_DIR}/imgui.cpp
+  ${IMGUI_DIR}/imgui_draw.cpp
+  ${IMGUI_DIR}/imgui_tables.cpp
+  ${IMGUI_DIR}/imgui_widgets.cpp
+  ${IMGUI_DIR}/backends/imgui_impl_sdl2.cpp
+  ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
+  ${IMGUI_DIR}/backends/imgui_impl_sdlrenderer2.cpp)
+
+target_include_directories(imgui PUBLIC ${IMGUI_DIR})
+target_link_libraries(imgui PUBLIC ${SDL2_LINK_TARGETS} OpenGL::GL)
+set_target_properties(imgui PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# ---------------------------------------------------------------------------
 # render_engine: the SDL2 window, input, and frame loop
 # ---------------------------------------------------------------------------
 
-add_library(render_engine STATIC src/Engine.cpp src/GLPresenter.cpp)
-target_link_libraries(render_engine PUBLIC render_core ${SDL2_LINK_TARGETS})
+# UI.cpp is the only file that includes imgui, and nothing in the pipeline
+# depends on it: the tests link render_engine and never construct a UI.
+add_library(render_engine STATIC src/Engine.cpp src/GLPresenter.cpp src/UI.cpp)
+target_link_libraries(render_engine PUBLIC render_core ${SDL2_LINK_TARGETS}
+                      PRIVATE imgui)
 
 # ---------------------------------------------------------------------------
 # The engine binary

@@ -476,16 +476,17 @@ public:
     }
 
     void getStats(int* submitted, int* culled_back, int* culled_offscreen,
-                  int* bin_overflow) {
+                  int* bin_entries) {
         int ds[4] = {0,0,0,0};
         if (initialized)
             cudaMemcpy(ds, d_stats, 4 * sizeof(int), cudaMemcpyDeviceToHost);
         if (submitted)        *submitted        = stat_submitted        + ds[3];
         if (culled_back)      *culled_back      = stat_culled_back      + ds[0];
         if (culled_offscreen) *culled_offscreen = stat_culled_offscreen + ds[1];
-        // not an overflow count: bins are sized exactly. this is the total
-        // number of (triangle, tile) pairs, i.e. how far binning fans out.
-        if (bin_overflow) *bin_overflow = stat_bin_entries;
+        // Not a cull count and not an error: bins are sized exactly by the
+        // prefix sum. This is (triangle, tile) pairs, i.e. how far binning
+        // fans out, and is normally larger than the triangle count.
+        if (bin_entries) *bin_entries = stat_bin_entries;
     }
 
     // just queue on CPU, no GPU work yet
@@ -1152,10 +1153,10 @@ extern "C" {
     }
 
     void cudaGetRasterStats(int* submitted, int* culled_back, int* culled_offscreen,
-                            int* bin_overflow) {
+                            int* bin_entries) {
         if (g_cuda_rasterizer) {
             g_cuda_rasterizer->getStats(submitted, culled_back, culled_offscreen,
-                                        bin_overflow);
+                                        bin_entries);
         }
     }
 

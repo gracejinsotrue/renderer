@@ -11,7 +11,7 @@ INCLUDES = -I/usr/include/SDL2
 LIBS = -lSDL2 -lSDL2main -lm -lGL
 
 # source files
-SOURCES = main.cpp Engine.cpp GLPresenter.cpp model.cpp transform.cpp tgaimage.cpp geometry.cpp hdri.cpp Scene.cpp SceneNode.cpp
+SOURCES = main.cpp Engine.cpp GLPresenter.cpp UI.cpp model.cpp transform.cpp tgaimage.cpp geometry.cpp hdri.cpp Scene.cpp SceneNode.cpp
 OBJECTS = $(SOURCES:.cpp=.o)
 
 # the GPU pipeline, one file per stage. rasterizer.cu owns the device
@@ -19,6 +19,17 @@ OBJECTS = $(SOURCES:.cpp=.o)
 CUDA_SOURCES = cuda/setup.cu cuda/binning.cu cuda/raster.cu cuda/shade.cu \
                cuda/ssao.cu cuda/ibl.cu cuda/resolve.cu cuda/rasterizer.cu cuda/present.cu
 CUDA_OBJECTS = $(CUDA_SOURCES:.cu=.o)
+
+# Dear ImGui, vendored. Built with its own flags: -Wall -Wextra on somebody
+# else's code is noise, and it does not want our -MMD dependency tracking.
+IMGUI_DIR = ../third_party/imgui
+IMGUI_SOURCES = $(IMGUI_DIR)/imgui.cpp $(IMGUI_DIR)/imgui_draw.cpp \
+                $(IMGUI_DIR)/imgui_tables.cpp $(IMGUI_DIR)/imgui_widgets.cpp \
+                $(IMGUI_DIR)/backends/imgui_impl_sdl2.cpp \
+                $(IMGUI_DIR)/backends/imgui_impl_opengl3.cpp \
+                $(IMGUI_DIR)/backends/imgui_impl_sdlrenderer2.cpp
+IMGUI_OBJECTS = $(IMGUI_SOURCES:.cpp=.o)
+IMGUI_INC = -I$(IMGUI_DIR)
 
 TARGET = unified_engine
 
@@ -31,13 +42,19 @@ all: $(TARGET)
 -include $(DEPS)
 
 #link executable
-$(TARGET): $(OBJECTS) $(CUDA_OBJECTS)
-	$(CXX) $(OBJECTS) $(CUDA_OBJECTS) -o $(TARGET) $(LIBS) \
+$(TARGET): $(OBJECTS) $(CUDA_OBJECTS) $(IMGUI_OBJECTS)
+	$(CXX) $(OBJECTS) $(CUDA_OBJECTS) $(IMGUI_OBJECTS) -o $(TARGET) $(LIBS) \
 	  -L/usr/local/cuda/lib64 -lcudart
+
+$(IMGUI_DIR)/%.o: $(IMGUI_DIR)/%.cpp
+	$(CXX) -std=c++17 -O2 $(INCLUDES) $(IMGUI_INC) -c $< -o $@
+
+$(IMGUI_DIR)/backends/%.o: $(IMGUI_DIR)/backends/%.cpp
+	$(CXX) -std=c++17 -O2 $(INCLUDES) $(IMGUI_INC) -c $< -o $@
 
 # Compile source files
 %.o: %.cpp
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $(IMGUI_INC) -c $< -o $@
 
 
 cuda/%.o: cuda/%.cu cuda/common.cuh cuda/stages.cuh cuda/shading.cuh geometry.h tgaimage.h
@@ -73,8 +90,8 @@ tools: $(TESTOBJS)
 	done
 
 # Headless end-to-end test of the real Engine (needs SDL2 + the scene graph).
-ENGOBJS = Engine.o GLPresenter.o Scene.o SceneNode.o model.o transform.o tgaimage.o \
-          geometry.o hdri.o $(CUDA_OBJECTS)
+ENGOBJS = Engine.o GLPresenter.o UI.o Scene.o SceneNode.o model.o transform.o \
+          tgaimage.o geometry.o hdri.o $(CUDA_OBJECTS) $(IMGUI_OBJECTS)
 
 test_ssao: $(ENGOBJS)
 	mkdir -p tests/bin
@@ -116,7 +133,7 @@ test_engine: $(ENGOBJS)
 
 # Clean build files
 clean:
-	rm -f $(OBJECTS) $(DEPS) $(CUDA_OBJECTS) $(TARGET)
+	rm -f $(OBJECTS) $(DEPS) $(CUDA_OBJECTS) $(IMGUI_OBJECTS) $(TARGET)
 	rm -rf tests/bin
 
 # install SDL2 (Ubuntu/Debian)

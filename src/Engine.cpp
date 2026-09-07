@@ -1,4 +1,5 @@
 #include "Engine.h"
+#include "UI.h"
 #include <iostream>
 #include <sstream>
 #include <iomanip>
@@ -9,7 +10,7 @@
 
 Engine::Engine(int winWidth, int winHeight, int renWidth, int renHeight)
     : window(nullptr), sdlRenderer(nullptr), frameTexture(nullptr),
-      wantGLPresent(false),
+      wantGLPresent(false), ui(nullptr), uiWanted(false),
       captureStaging(renWidth, renHeight, TGAImage::RGB),
       uploadedBackgroundVersion(-1), uploadedEnvironmentVersion(-1),
       cachedGeometryVersion(0),
@@ -121,6 +122,9 @@ bool Engine::init()
     std::cout << "  C            - Clear the backdrop" << std::endl;
     std::cout << "  [ / ]        - Exposure" << std::endl;
     std::cout << "  ESC          - Exit" << std::endl;
+
+    std::cout << "\nEverything above is also in the panel, along with the "
+                 "per-stage GPU timings." << std::endl;
 
     cuda_available = initCudaRasterizerSS(renderWidth, renderHeight, ssaaFactor);
     if (!cuda_available)
@@ -470,8 +474,33 @@ void Engine::scaleSelectedObject(const Vec3f &delta)
     }
 }
 
+// The presenter is built after the rasterizer, so the earliest a backend
+// exists is the first frame. Nothing here runs unless main.cpp asked for it.
+void Engine::ensureUI()
+{
+    if (!uiWanted || ui) return;
+
+    ui = new UI();
+    if (!ui->init(window, glPresenter.isValid() ? glPresenter.getContext() : nullptr,
+                  glPresenter.isValid() ? nullptr : sdlRenderer))
+    {
+        delete ui;
+        ui = nullptr;
+        uiWanted = false;
+        std::cerr << "UI unavailable; running without it" << std::endl;
+    }
+}
+
+void Engine::buildUI()
+{
+    ensureUI();
+    if (ui) ui->build(*this);
+}
+
 void Engine::run()
 {
+    ensureUI();
+
     while (running)
     {
         auto currentTime = std::chrono::high_resolution_clock::now();
@@ -488,6 +517,7 @@ void Engine::run()
 
         update();
         render();
+        buildUI();
         present();
 
         // SDL_Delay(33);
@@ -499,6 +529,28 @@ void Engine::handleEvents()
     SDL_Event event;
     while (SDL_PollEvent(&event))
     {
+        if (ui) ui->handleEvent(event);
+
+        // A drag on a slider would otherwise also orbit the camera, and
+        // typing a path into a field would fly it around. SDL_QUIT still gets
+        // through: the panel has no claim on closing the window.
+        if (ui && event.type != SDL_QUIT)
+        {
+            bool mouse = event.type == SDL_MOUSEMOTION ||
+                         event.type == SDL_MOUSEBUTTONDOWN ||
+                         event.type == SDL_MOUSEBUTTONUP ||
+                         event.type == SDL_MOUSEWHEEL;
+            bool key = event.type == SDL_KEYDOWN || event.type == SDL_KEYUP;
+            if ((mouse && ui->wantsMouse()) || (key && ui->wantsKeyboard()))
+            {
+                // Held keys have to be released, or one that was down when the
+                // pointer entered a panel stays down forever.
+                if (event.type == SDL_KEYDOWN || event.type == SDL_KEYUP)
+                    memset(keys, 0, sizeof(keys));
+                continue;
+            }
+        }
+
         switch (event.type)
         {
         case SDL_QUIT:
@@ -1066,7 +1118,9 @@ void Engine::present()
     // only thing that differs between them is how the pixels get there.
     if (glPresenter.isValid())
     {
-        glPresenter.present();
+        glPresenter.drawFrame();
+        if (ui) ui->render();
+        glPresenter.swap();
         return;
     }
 
@@ -1098,6 +1152,8 @@ void Engine::present()
     dstRect.y = (windowHeight - dstRect.h) / 2;
 
     SDL_RenderCopy(sdlRenderer, frameTexture, NULL, &dstRect);
+
+    if (ui) ui->render();
 
     SDL_RenderPresent(sdlRenderer);
 }
@@ -1189,6 +1245,14 @@ void Engine::shutdown()
             cudaDestroyMesh(kv.second);
         cudaMeshes.clear();
         cleanupCudaRasterizer();
+    }
+
+    // before the presenter: the UI's backend holds GL objects in its context
+    if (ui)
+    {
+        ui->shutdown();
+        delete ui;
+        ui = nullptr;
     }
 
     // before the window: the GL context is owned by the presenter and the

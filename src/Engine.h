@@ -12,6 +12,8 @@
 #include "tgaimage.h"
 #include "GLPresenter.h"
 
+class UI;
+
 extern "C"
 {
     bool initCudaRasterizer(int width, int height);
@@ -24,9 +26,16 @@ extern "C"
     void cudaBlitToTexture(void *dst, int dst_pitch);
     // fallback: device frame -> host TGAImage, for overlays and TGA capture
     void cudaCopyResults(TGAImage &framebuffer);
-    // per-frame triangle counts (offered / backface-culled / offscreen-culled)
+    // Per-frame triangle counts: offered, backface-culled, offscreen-culled.
+    // What actually rasterized is offered minus the two.
+    //
+    // bin_entries is not a cull count and not an error: bins are sized
+    // exactly by the prefix sum, so nothing overflows. It is the number of
+    // (triangle, tile) pairs, which is how far binning fans out -- a triangle
+    // covering nine tiles is nine entries -- and so is normally larger than
+    // the triangle count.
     void cudaGetRasterStats(int *submitted, int *culled_back, int *culled_offscreen,
-                            int *bin_overflow);
+                            int *bin_entries);
     // GPU milliseconds for the most recent flush (bin pass / raster pass)
     void cudaGetKernelTimings(float *upload_ms, float *bin_ms, float *raster_ms);
     // persistent device geometry: upload once, transform on the GPU each frame
@@ -36,6 +45,14 @@ extern "C"
     void cudaSetMeshTexture(int handle, int slot, const unsigned char *px,
                             int w, int h, int bpp);
     void cudaSetLinearTextureFiltering(int enabled);
+    // Which colour path runs. Deferred shades once per covered pixel; forward
+    // shades inside the depth loop and pays per fragment that ever won.
+    void cudaSetDeferredShading(int enabled);
+    int cudaGetDeferredShading();
+    // fragment shader invocations in the last flush, which is what separates
+    // the two paths on a scene with overdraw
+    int cudaGetShadeCount();
+    void cudaSetToneMapping(int enabled);
     // composited under every frame by cudaClearBuffers, at render resolution
     void cudaSetBackground(const unsigned char *px, int w, int h, int bpp);
     void cudaClearBackground();
@@ -84,6 +101,14 @@ private:
     GLPresenter glPresenter;
     // window was created GL-capable, so a presenter is worth attempting
     bool wantGLPresent;
+
+    // Optional control panel, created on the first present when enabled.
+    // Held by pointer so imgui.h stays out of this header, which the headless
+    // tests include. Null in every test: nothing constructs one unless
+    // setUIEnabled(true) has been called.
+    UI *ui;
+    bool uiWanted;
+    void ensureUI();
 
     Scene scene;
     // host copy, written only when captureFrame() asks for a TGA
@@ -171,6 +196,11 @@ public:
     // Main loop functions
     void handleEvents();
     void update();
+    // Builds the panel for this frame, between render() and present(). A
+    // separate step because the loop is driven by hand in several places --
+    // the tests, the capture tools -- and those want the frame without it.
+    // Does nothing unless setUIEnabled(true) was called.
+    void buildUI();
     void render();
     void present();
 
@@ -218,6 +248,10 @@ public:
     }
     bool isCudaAvailable() const { return cuda_available; }
 
+    // Opt-in, and off by default so the headless tests never build one.
+    // main.cpp is the only caller.
+    void setUIEnabled(bool on) { uiWanted = on; }
+
     // Switches the present path between the host copy and CUDA/GL interop
     // in place, so the two can be compared inside one run rather than across
     // process launches. Does nothing when interop is unavailable.
@@ -236,6 +270,7 @@ public:
     void toggleSSAO();
     bool isSSAOEnabled() const { return ssaoEnabled; }
     void setSSAODebug(int mode) { ssaoDebug = mode; }
+    int getSSAODebug() const { return ssaoDebug; }
     void setSSAOIntensity(float v);
     void setSSAORadius(float v);
 

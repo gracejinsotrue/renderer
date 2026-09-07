@@ -11,6 +11,8 @@ int main(int argc, char **argv)
     // create engine instance
     Engine engine(1024, 768, 800, 800);
 
+    engine.setUIEnabled(true);
+
     // initialize
     if (!engine.init())
     {
