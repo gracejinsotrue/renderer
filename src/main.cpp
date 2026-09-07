@@ -40,17 +40,24 @@ int main(int argc, char **argv)
     }
     else
     {
-        // load default models
-        engine.loadModel("obj/test3.obj", "MainModel");
+        // No models named, so open the one scene that ships with the repository.
+        // Paths are relative to the working directory; running from the repo
+        // root is what the README documents.
+        static const char *defaultScene[] = {
+            "assets/toycar/ToyCar.obj", "assets/toycar/Fabric.obj",
+            "assets/toycar/Glass.obj", "assets/scene/ground.obj",
+        };
+        int loaded = 0;
+        for (const char *path : defaultScene)
+            if (engine.loadModel(path))
+                loaded++;
 
-        // create some example objects for testing
-        SceneNode *empty1 = engine.createEmptyNode("Controller1");
-        empty1->setPosition(Vec3f(2, 0, 0));
-
-        SceneNode *empty2 = engine.createEmptyNode("Controller2");
-        empty2->setPosition(Vec3f(-2, 0, 0));
-
-        std::cout << "Loaded default scene with test objects" << std::endl;
+        if (loaded == 0)
+            std::cerr << "No models loaded. Run from the repository root, or "
+                         "pass a .obj on the command line." << std::endl;
+        else
+            std::cout << "Loaded the default scene: " << loaded << " meshes"
+                      << std::endl;
     }
 
     // print scene hierarchy

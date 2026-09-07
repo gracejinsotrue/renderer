@@ -14,6 +14,7 @@ Engine::Engine(int winWidth, int winHeight, int renWidth, int renHeight)
       uploadedBackgroundVersion(-1), cachedGeometryVersion(0),
       running(false), showStats(true), ssaaFactor(2),
       ssaoEnabled(true), ssaoRadius(0.18f), ssaoIntensity(0.85f), ssaoDebug(0),
+      shadowBias(2.0f),
       windowWidth(winWidth), windowHeight(winHeight), renderWidth(renWidth), renderHeight(renHeight),
       mouseX(0), mouseY(0), mouseDeltaX(0), mouseDeltaY(0), lastMouseX(0), lastMouseY(0), mousePressed(false),
       cameraRotationX(0.0f), cameraRotationY(0.0f), orbitMode(true)
@@ -973,7 +974,7 @@ void Engine::renderScene()
         // this is a fraction of that range, not a world distance. 2.0 gives
         // contact shadows without acne; tune per scene if needed.
         cudaDrawMesh(mesh, mvp, clip, mit, light, lightColor, lightIntensity,
-                     msh, 2.0f, 200, 170, 150);
+                     msh, shadowBias, 200, 170, 150);
     }
 
     // Ambient occlusion, straight over the finished device frame. The

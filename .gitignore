@@ -14,8 +14,15 @@ unified_engine
 *.a
 __pycache__/
 
-# private scratch log. the curated version is NOTES.md, which is tracked.
+# No models or textures are redistributed from here. assets/ stays local and is
+# covered by the *.obj and *.tga patterns above; tools/fetch_models.py pulls
+# what it needs from the original sources at run time.
+assets/
+
+# working notes, kept local. memory.md is the raw scratch log and NOTES.md the
+# curated engineering log; neither is published.
 memory.md
+NOTES.md
 
 # compiled test binaries
 src/tests/bin/

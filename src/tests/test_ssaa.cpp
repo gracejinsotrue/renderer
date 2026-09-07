@@ -77,7 +77,7 @@ int main(int argc, char **argv)
 
     Engine engine(1024, 768, 800, 800);
     if (!engine.init()) { printf("engine init failed\n"); return 1; }
-    if (!engine.isCudaAvailable()) { printf("no CUDA, skipping\n"); return 0; }
+    if (!engine.isCudaAvailable()) { printf("SKIP: no CUDA\n"); return 77; }
     if (!engine.loadModel(path, "head")) { printf("could not load %s\n", path); return 1; }
 
     // SSAO would blend its own intermediate values into the edges and muddy

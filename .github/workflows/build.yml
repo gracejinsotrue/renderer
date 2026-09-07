@@ -1,0 +1,83 @@
+name: build
+
+# What this proves, and what it does not.
+#
+# GitHub's runners have no GPU, so nothing here renders a pixel. What it checks
+# is that both toolchains still compile the project from a clean checkout --
+# MSVC + nvcc on Windows, gcc + nvcc on Linux -- which is the thing that
+# actually rots, and what the two builds producing identical test output rests
+# on.
+#
+# ctest runs afterwards and is expected to report every test as skipped: each
+# one returns 77 when there is no CUDA device. That is still worth running,
+# because it catches a binary that crashes before it gets as far as deciding it
+# has no GPU.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    name: Linux / gcc + nvcc
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install CUDA
+        uses: Jimver/cuda-toolkit@v0.2.21
+        with:
+          cuda: '12.5.0'
+          method: 'network'
+          # cub lives in the cccl/thrust package and binning.cu includes it
+          sub-packages: '["nvcc", "cudart-dev", "thrust"]'
+
+      - name: Install SDL2 and Ninja
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev ninja-build
+
+      - name: Configure
+        # "native" is the default and needs a GPU to resolve. 86 is the card
+        # the measurements in the README were taken on.
+        run: cmake --preset linux -DCMAKE_CUDA_ARCHITECTURES=86
+
+      - name: Build
+        run: cmake --build build/linux
+
+      - name: Test (expected to skip; no GPU on the runner)
+        run: ctest --test-dir build/linux --output-on-failure --no-tests=error
+
+  windows:
+    name: Windows / MSVC + nvcc
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install CUDA
+        uses: Jimver/cuda-toolkit@v0.2.21
+        with:
+          cuda: '12.5.0'
+          method: 'network'
+          sub-packages: '["nvcc", "cudart", "thrust", "visual_studio_integration"]'
+
+      - name: Install SDL2
+        run: vcpkg install sdl2:x64-windows
+
+      - name: Set up MSVC environment
+        # Ninja drives cl.exe directly, so it needs the vcvars environment.
+        # This is the same requirement the native build notes describe.
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure
+        env:
+          VCPKG_ROOT: ${{ env.VCPKG_INSTALLATION_ROOT }}
+        run: cmake --preset windows -DCMAKE_CUDA_ARCHITECTURES=86
+
+      - name: Build
+        run: cmake --build build/windows
+
+      - name: Test (expected to skip; no GPU on the runner)
+        run: ctest --test-dir build/windows --output-on-failure --no-tests=error

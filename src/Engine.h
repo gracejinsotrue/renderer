@@ -115,6 +115,9 @@ private:
     float ssaoIntensity;
     int ssaoDebug;    // 0 off, 1 ao term, 2 normals, 3 depth
 
+    // shadow map comparison bias; see setShadowBias
+    float shadowBias;
+
     // Rendering dimensions
     int renderWidth, renderHeight;
     int windowWidth, windowHeight;
@@ -207,6 +210,13 @@ public:
     void setSSAODebug(int mode) { ssaoDebug = mode; }
     void setSSAOIntensity(float v);
     void setSSAORadius(float v);
+
+    // Depth spans 0..255 regardless of world scale, so this is a fraction of
+    // that range rather than a world distance. A negative value switches the
+    // shader into its shadow debug view, which emits (sz, stored, 0) instead
+    // of shading -- that is how you see what the comparison is actually doing.
+    void setShadowBias(float v) { shadowBias = v; }
+    float getShadowBias() const { return shadowBias; }
     float getSSAOIntensity() const { return ssaoIntensity; }
     float getSSAORadius() const { return ssaoRadius; }
 };

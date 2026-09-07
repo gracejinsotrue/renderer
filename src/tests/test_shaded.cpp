@@ -58,8 +58,21 @@ static int diffPixels(TGAImage &a, TGAImage &b, int *maxDiff, int *significantPi
 
 int main(int argc,char**argv){
     const int W=600,H=600;
-    const char* path = (argc>1)?argv[1]:"../obj/african_head.obj";
+    // Stays on african_head: the thresholds below are calibrated against this
+    // model, and the figures in the README are what they mean. It is not tracked,
+    // so fetch it. Do not repoint this at a model in assets/ without
+    // re-deriving the thresholds -- loosening them to fit a new model is how a
+    // differential test stops testing anything.
+    const char* path = (argc>1)?argv[1]:"../assets/external/african_head/african_head.obj";
     Model m(path);
+    // A model that did not load renders nothing on BOTH paths, and two empty
+    // images agree perfectly. Without this the test reports a confident pass
+    // having compared nothing at all, which is the exact failure the suite is
+    // built to catch.
+    if(m.nverts()==0 || m.nfaces()==0){
+        printf("SKIP: no model at %s\n  run: python tools/fetch_models.py african_head\n", path);
+        return 77;
+    }
     if(!initCudaRasterizer(W,H)){printf("SKIP: no CUDA\n");return 77;}
 
     Vec3f lo(1e9f,1e9f,1e9f), hi(-1e9f,-1e9f,-1e9f);

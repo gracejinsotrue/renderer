@@ -51,7 +51,11 @@ static long long coverage(TGAImage &img)
 
 int main(int argc, char **argv)
 {
-    const char *path = (argc > 1) ? argv[1] : "../obj/african_head.obj";
+    // Stays on african_head: the landmarks this test compares are coordinates
+    // on that model's face -- a concave one against a convex one -- so pointing
+    // it at other geometry measures nothing. The model is not tracked; fetch it
+    // with tools/fetch_models.py.
+    const char *path = (argc > 1) ? argv[1] : "../assets/external/african_head/african_head.obj";
 
     // no window, no GPU presentation. the dummy video driver has no
     // accelerated renderer and Engine::init asks for SDL_RENDERER_ACCELERATED,
@@ -61,8 +65,13 @@ int main(int argc, char **argv)
 
     Engine engine(1024, 768, 800, 800);
     if (!engine.init()) { printf("engine init failed\n"); return 1; }
-    if (!engine.isCudaAvailable()) { printf("no CUDA, skipping\n"); return 0; }
-    if (!engine.loadModel(path, "head")) { printf("could not load %s\n", path); return 1; }
+    if (!engine.isCudaAvailable()) { printf("SKIP: no CUDA\n"); return 77; }
+    if (!engine.loadModel(path, "head"))
+    {
+        printf("SKIP: no model at %s\n"
+               "  run: python tools/fetch_models.py african_head\n", path);
+        return 77;
+    }
 
     // front view, so the landmarks below are where they are expected
     printf("\n--- ambient occlusion\n");

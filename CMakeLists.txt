@@ -3,7 +3,7 @@
 # src/Makefile still works and is still the WSL path; this exists so the
 # project also builds natively on Windows (MSVC) and Linux, where the frame
 # no longer has to cross WSL2's ~1.8 GB/s paravirtualization boundary and
-# CUDA/OpenGL interop is actually reachable. See NOTES.md.
+# CUDA/OpenGL interop is actually reachable.
 #
 #   cmake -B build -DCMAKE_BUILD_TYPE=Release
 #   cmake --build build --config Release
@@ -191,8 +191,15 @@ endif()
 # be an independent implementation the kernels can disagree with.
 # The engine tests drive the real Engine headlessly via SDL's dummy driver.
 #
-# Both resolve models as ../obj/... from src/, so that is the working
-# directory ctest runs them in.
+# Both resolve models relative to src/, so that is the working directory ctest
+# runs them in.
+#
+# Most take the model as argv[1] and are handed one from assets/, which ships
+# with the repository, so a fresh clone gets a suite that actually renders
+# something. test_shaded and test_ssao are the exceptions: their thresholds and
+# landmarks are calibrated against african_head specifically, so they keep it as
+# their default and skip when it is absent rather than being repointed at
+# geometry the numbers do not describe. tools/fetch_models.py downloads it.
 
 option(BUILD_TESTING_RENDERER "Build the rasterizer test suite" ON)
 
@@ -207,6 +214,21 @@ if(BUILD_TESTING_RENDERER)
   # End-to-end tests that need the real Engine, and therefore SDL2.
   set(ENGINE_TESTS test_engine test_ssao test_ssaa test_background test_meshcache)
 
+  # Models from assets/, as the tests see them from src/.
+  set(ASSET_BUNNY  ../assets/bunny/bunny.obj)
+  set(ASSET_GLASS  ../assets/toycar/Glass.obj)
+
+  # Which model each test is run against. Anything not listed here takes its
+  # own default, which is what test_shaded and test_ssao rely on.
+  set(MODEL_test_cull       ${ASSET_BUNNY})
+  set(MODEL_test_mesh       ${ASSET_BUNNY})
+  set(MODEL_test_frustum    ${ASSET_BUNNY})
+  set(MODEL_test_engine     ${ASSET_BUNNY})
+  set(MODEL_test_ssaa       ${ASSET_BUNNY})
+  set(MODEL_test_background ${ASSET_BUNNY})
+  # needs two distinct models: the cache it checks is keyed by Model*
+  set(MODEL_test_meshcache  ${ASSET_BUNNY} ${ASSET_GLASS})
+
   # Local benchmarking and inspection tools. These are gitignored, so build
   # whichever happen to be present rather than failing on the ones that are not.
   set(OPTIONAL_TOOLS test_wind bench bench_cull bench_tile profile_frame
@@ -216,16 +238,23 @@ if(BUILD_TESTING_RENDERER)
     add_executable(${_t} src/tests/${_t}.cpp ${REFERENCE_RASTER})
     target_include_directories(${_t} PRIVATE ${CMAKE_SOURCE_DIR}/src/tests)
     target_link_libraries(${_t} PRIVATE render_core)
-    add_test(NAME ${_t} COMMAND ${_t} WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/src)
+    add_test(NAME ${_t} COMMAND ${_t} ${MODEL_${_t}}
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/src)
+    # 77 means the test declined to run -- no CUDA device, or a model it needs
+    # is not present. That has to read as skipped, not passed: a test that
+    # renders nothing and compares nothing agrees with itself perfectly.
+    set_tests_properties(${_t} PROPERTIES SKIP_RETURN_CODE 77)
   endforeach()
 
   foreach(_t IN LISTS ENGINE_TESTS)
     add_executable(${_t} src/tests/${_t}.cpp)
     target_include_directories(${_t} PRIVATE ${CMAKE_SOURCE_DIR}/src/tests)
     target_link_libraries(${_t} PRIVATE render_engine)
-    add_test(NAME ${_t} COMMAND ${_t} WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/src)
+    add_test(NAME ${_t} COMMAND ${_t} ${MODEL_${_t}}
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/src)
     # test_engine opens no window; the others also run without a display.
-    set_tests_properties(${_t} PROPERTIES ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+    set_tests_properties(${_t} PROPERTIES ENVIRONMENT "SDL_VIDEODRIVER=dummy"
+                                          SKIP_RETURN_CODE 77)
   endforeach()
 
   foreach(_t IN LISTS OPTIONAL_TOOLS)
