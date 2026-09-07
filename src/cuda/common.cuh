@@ -25,6 +25,32 @@ struct CudaColor {
         : r(r_), g(g_), b(b_) {}
 };
 
+// The equirectangular convention, in one place because three stages now use
+// it: the backdrop samples the environment, the convolution walks it, and the
+// shader samples the irradiance map built from it. Longitude runs around Y,
+// latitude from +Y down, which puts row 0 of a decoded .hdr at the top.
+__device__ inline
+void equirect_uv(float dx, float dy, float dz, float* u, float* v)
+{
+    const float INV_TWO_PI = 0.15915494309189535f;
+    const float INV_PI     = 0.31830988618379067f;
+    *u = atan2f(dz, dx) * INV_TWO_PI + 0.5f;
+    *v = acosf(fminf(fmaxf(dy, -1.f), 1.f)) * INV_PI;
+}
+
+__device__ inline
+void equirect_dir(float u, float v, float* dx, float* dy, float* dz)
+{
+    const float TWO_PI = 6.283185307179586f;
+    const float PI     = 3.141592653589793f;
+    float phi = (u - 0.5f) * TWO_PI;
+    float theta = v * PI;
+    float st = sinf(theta);
+    *dx = cosf(phi) * st;
+    *dy = cosf(theta);
+    *dz = sinf(phi) * st;
+}
+
 // per-triangle data uploaded to GPU in one shot
 struct CudaTriangle {
     CudaVec4 v[3];
@@ -56,6 +82,17 @@ struct CudaMaterial {
     // sampled normal must be carried to eye space like the vertex normals.
     // using it raw collapses the diffuse term to near zero.
     float mit[9];
+    // Diffuse image-based lighting. The map holds E/pi for each direction, so
+    // the shader multiplies it by albedo and nothing else. Frame-global, and
+    // copied per mesh for the same reason the light above is: the material
+    // table is the only thing a triangle can reach from inside the kernel.
+    cudaTextureObject_t irradiance;
+    int has_irradiance;
+    float ibl_intensity;
+    // eye -> world rotation, so an eye-space normal can index a map that is
+    // built in world space. The camera rotation is orthonormal, so this is
+    // just its transpose.
+    float e2w[9];
 };
 // starting capacity only. the table is uploaded fresh each flush and grown on
 // demand, so there is no cap on how many meshes a frame may draw.
@@ -88,6 +125,12 @@ struct MeshDraw {
     int mat_id;
     CudaColor color;
 };
+
+// The irradiance map's size. A cosine lobe removes essentially all angular
+// detail, so this is as much as the result can carry; the whole map is 512
+// texels.
+#define IRRADIANCE_W 32
+#define IRRADIANCE_H 16
 
 // The hemisphere sample count. It sizes a host-side staging array as well as
 // the kernel's loop, so both sides have to see the same number.

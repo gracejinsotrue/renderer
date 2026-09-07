@@ -83,6 +83,31 @@ moves 14 levels over an eightfold change while the dim channels move 135.
 Probing one channel measures where that channel sits on the curve, not whether
 exposure works.
 
+The diffuse IBL checks hang on one number that can be worked out on paper.
+The integral of cosine over a hemisphere is pi, so a constant environment L
+convolves to exactly L and a surface renders at albedo * L and nothing else.
+Drop the sin(theta) weighting, the solid angle, or the divide by pi and the
+result lands somewhere different; with L = 0.5 and the untextured mesh colour
+the frame has to read 100, 85, 75, and it does, exactly. The direct light is
+set to zero and the tone map turned off for those checks, so what is in the
+frame is the irradiance term alone rather than a display of it.
+
+The directional checks that follow assert ordering only. What the centre pixel
+shows is whichever surface the bunny presents there, which is not
+axis-aligned, so the absolute values belong to the model rather than to the
+convolution. What they catch is a dropped eye-to-world rotation: the map is
+built in world space and normals arrive in eye space, and without the
+transpose the centre normal reads as +Z from every camera and all three views
+come back equal.
+
+The convolution was also checked once against a CPU implementation of the same
+integral over a real sky map, outside the suite. It agreed: E/pi of 5.9
+upward against 0.15 downward, and a predicted 211/255 for an up-facing surface
+where the sky behind it sits at 94. That is worth recording because the render
+looks wrong at a glance -- the object comes out brighter than the sky lighting
+it -- and it is not. A sun contributes about 6 units of irradiance where the
+blue sky radiance is under 3, which is a white object in sunlight.
+
 Its .hdr files are written by the test rather than committed. A map small
 enough to commit is still a binary nobody can read, and generating it means the
 Radiance decoder is checked against known values: the same pixels are written

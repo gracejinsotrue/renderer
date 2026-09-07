@@ -115,12 +115,8 @@ void environment_kernel(float4* framebuffer, cudaTextureObject_t env,
     if (len < 1e-12f) return;
     dx /= len; dy /= len; dz /= len;
 
-    // Equirectangular: longitude around Y, latitude from +Y down. v is not
-    // flipped because row 0 of the decoded .hdr is the top of the sphere.
-    const float INV_TWO_PI = 0.15915494309189535f;
-    const float INV_PI     = 0.31830988618379067f;
-    float u = atan2f(dz, dx) * INV_TWO_PI + 0.5f;
-    float v = acosf(fminf(fmaxf(dy, -1.f), 1.f)) * INV_PI;
+    float u, v;
+    equirect_uv(dx, dy, dz, &u, &v);
 
     // .x=R here, where the LDR background texture is BGRA and reads .z=R:
     // this one is uploaded straight from float RGBA rather than from a TGA.

@@ -47,6 +47,10 @@ extern "C"
     // resolution: what turns a pixel back into a world-space view ray. Sent
     // every frame, so a rasterizer rebuild does not strand it.
     void cudaSetEnvironmentView(const float *inv16);
+    // Row-major 3x3 eye -> world rotation, and how much of the environment's
+    // light the shading takes. Diffuse IBL is off until an environment is
+    // loaded; loading one builds the irradiance map.
+    void cudaSetIBL(const float *e2w9, float intensity);
     // linear multiplier applied by the tone map, ahead of the curve
     void cudaSetExposure(float exposure);
     // 0 emits the linear frame scaled to 0..255 with no exposure and no
@@ -136,6 +140,10 @@ private:
 
     // Linear multiplier applied to the whole frame before the tone curve.
     float exposure;
+
+    // How much of the environment's irradiance reaches the shading. Has no
+    // effect without an environment loaded.
+    float iblIntensity;
 
     // Rendering dimensions
     int renderWidth, renderHeight;
@@ -242,6 +250,9 @@ public:
 
     void setExposure(float v);
     float getExposure() const { return exposure; }
+
+    void setIBLIntensity(float v);
+    float getIBLIntensity() const { return iblIntensity; }
 };
 
 #endif // __ENGINE_H__

@@ -23,6 +23,8 @@
 #include "hdri.h"
 #include "compat.h"
 
+extern "C" void cudaSetToneMapping(int);
+
 static int failures = 0;
 
 static void check(bool ok, const char *what)
@@ -164,6 +166,45 @@ static void report(const char *what, const Patch &p)
 
 static const char *FLAT_HDR = "t_env_flat.hdr";
 static const char *RLE_HDR = "t_env_rle.hdr";
+static const char *UNIFORM_HDR = "t_env_uniform.hdr";
+static const char *HALF_HDR = "t_env_half.hdr";
+
+static const float UNIFORM_L = 0.5f;
+// bright over the +X hemisphere, near-dark over -X
+static const float HALF_HI = 2.0f;
+static const float HALF_LO = 0.02f;
+
+// kind 0: constant UNIFORM_L. kind 1: split by the sign of the x component of
+// the direction each texel stands for.
+static bool writeIBLMap(const char *path, int kind)
+{
+    const int W = 64, H = 32;
+    FILE *f = fopen(path, "wb");
+    if (!f) return false;
+    fprintf(f, "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y %d +X %d\n", H, W);
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            float rgb[3];
+            if (kind == 0) {
+                rgb[0] = rgb[1] = rgb[2] = UNIFORM_L;
+            } else {
+                float phi = ((x + 0.5f) / W - 0.5f) * 2.f * 3.14159265f;
+                float theta = (y + 0.5f) / H * 3.14159265f;
+                float dx = cosf(phi) * sinf(theta);
+                rgb[0] = rgb[1] = rgb[2] = (dx > 0.f) ? HALF_HI : HALF_LO;
+            }
+            unsigned char px[4];
+            floatToRgbe(rgb, px);
+            fwrite(px, 1, 4, f);
+        }
+    }
+    fclose(f);
+    return true;
+}
+
+// The colour renderScene gives an untextured mesh, which is the albedo the
+// irradiance below is multiplied by.
+static const float ALBEDO_R = 200.f, ALBEDO_G = 170.f, ALBEDO_B = 150.f;
 
 int main(int argc, char **argv)
 {
@@ -281,6 +322,68 @@ int main(int argc, char **argv)
     TGAColor corner = withModel.get(20, 20);
     check(corner[0] || corner[1] || corner[2],
           "the backdrop still draws where the model does not");
+
+    // Diffuse IBL. Everything from here on runs with the tone map off, the
+    // direct light at zero and no occlusion, so what lands in the frame is the
+    // irradiance term alone and can be predicted rather than eyeballed.
+    printf("\n--- diffuse irradiance\n");
+    if (!writeIBLMap(UNIFORM_HDR, 0) || !writeIBLMap(HALF_HDR, 1)) {
+        printf("could not write the IBL maps\n");
+        cleanup();
+        return 1;
+    }
+    written.push_back(UNIFORM_HDR);
+    written.push_back(HALF_HDR);
+
+    cudaSetToneMapping(0);
+    engine.getScene().light.intensity = 0.f;
+    if (engine.isSSAOEnabled()) engine.toggleSSAO();
+    engine.setExposure(1.0f);
+
+    // The integral of cosine over a hemisphere is pi, so a constant
+    // environment L convolves to exactly L and a surface renders at
+    // albedo * L. That is the whole normalisation of the convolution in one
+    // number: drop the sin(theta), the divide by pi, or the solid angle, and
+    // this lands somewhere else.
+    engine.loadEnvironment(UNIFORM_HDR);
+    TGAImage fUni = lookFrom(engine, Vec3f(0, 0, 3), "t_env_uni.tga");
+    Patch uni = centrePatch(fUni);
+    report("uniform L=0.5", uni);
+    printf("  expected            r=%6.1f g=%6.1f b=%6.1f\n",
+           ALBEDO_R * UNIFORM_L, ALBEDO_G * UNIFORM_L, ALBEDO_B * UNIFORM_L);
+    check(fabsf(uni.r - ALBEDO_R * UNIFORM_L) < 5.f &&
+          fabsf(uni.g - ALBEDO_G * UNIFORM_L) < 5.f &&
+          fabsf(uni.b - ALBEDO_B * UNIFORM_L) < 5.f,
+          "a constant environment convolves to itself");
+
+    // With the light in one hemisphere, what the centre of the frame shows
+    // depends on which way the surface there faces in WORLD space. Orbiting
+    // the camera has to change it. If the eye-to-world rotation were dropped,
+    // the centre normal would read as +Z in every one of these views and all
+    // three would come back the same.
+    engine.loadEnvironment(HALF_HDR);
+    TGAImage fPX = lookFrom(engine, Vec3f(3, 0, 0), "t_env_px.tga");
+    TGAImage fNX = lookFrom(engine, Vec3f(-3, 0, 0), "t_env_nx.tga");
+    TGAImage fPZ = lookFrom(engine, Vec3f(0, 0, 3), "t_env_pz.tga");
+    Patch px = centrePatch(fPX), nx = centrePatch(fNX), pz = centrePatch(fPZ);
+    report("facing +X (lit)", px);
+    report("facing -X (dark)", nx);
+    report("facing +Z (half)", pz);
+    // Ordering only. What the centre pixel shows is the surface the bunny
+    // happens to present there, which is not axis-aligned, so the absolute
+    // values are a property of the model rather than of the convolution --
+    // the uniform case above is where the arithmetic is pinned down. What
+    // matters here is that the three differ at all and in the right order,
+    // because a dropped eye-to-world rotation makes them equal.
+    check(px.r > 200.f, "a normal inside the lit hemisphere takes its radiance");
+    check(px.r > 3.f * nx.r, "facing away from the light is several times darker");
+    check(pz.r > nx.r + 40.f && pz.r < px.r - 40.f,
+          "a normal on the boundary lands between the two");
+
+    engine.getScene().light.intensity = 1.f;
+    cudaSetToneMapping(1);
+    if (!engine.isSSAOEnabled()) engine.toggleSSAO();
+    engine.loadEnvironment(FLAT_HDR);
 
     printf("\n--- environment cleared\n");
     engine.getScene().clearEnvironment();

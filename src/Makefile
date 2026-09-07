@@ -17,7 +17,7 @@ OBJECTS = $(SOURCES:.cpp=.o)
 # the GPU pipeline, one file per stage. rasterizer.cu owns the device
 # memory and sequences the rest; cuda/stages.cuh is the boundary.
 CUDA_SOURCES = cuda/setup.cu cuda/binning.cu cuda/raster.cu cuda/shade.cu \
-               cuda/ssao.cu cuda/resolve.cu cuda/rasterizer.cu cuda/present.cu
+               cuda/ssao.cu cuda/ibl.cu cuda/resolve.cu cuda/rasterizer.cu cuda/present.cu
 CUDA_OBJECTS = $(CUDA_SOURCES:.cu=.o)
 
 TARGET = unified_engine

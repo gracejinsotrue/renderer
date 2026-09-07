@@ -141,6 +141,7 @@ add_library(render_core STATIC
   src/cuda/raster.cu
   src/cuda/shade.cu
   src/cuda/ssao.cu
+  src/cuda/ibl.cu
   src/cuda/resolve.cu
   src/cuda/rasterizer.cu
 

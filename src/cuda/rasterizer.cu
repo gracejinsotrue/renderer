@@ -184,6 +184,14 @@ private:
     bool has_env;
     Mat4 env_inv_vp;
 
+    // Diffuse IBL, built from the environment once at load. Small on purpose:
+    // a cosine lobe cannot carry detail finer than this.
+    cudaArray_t d_irr_arr;
+    cudaTextureObject_t d_irr_tex;
+    bool has_irr;
+    float ibl_intensity;
+    float ibl_e2w[9];
+
     // per-stage GPU timing. nsys can't get a GPU timeline through WSL2 and
     // ncu needs a driver permission change, so the kernels time themselves.
     cudaEvent_t ev_start, ev_upload, ev_bin, ev_raster;
@@ -205,12 +213,14 @@ public:
           tone_enabled(true), tone_passthrough(false),
           d_bg_arr(NULL), d_bg_tex(0), has_bg(false),
           d_env_arr(NULL), d_env_tex(0), has_env(false),
+          d_irr_arr(NULL), d_irr_tex(0), has_irr(false), ibl_intensity(1.0f),
           d_draws(NULL), draw_capacity(0), h_draw_faces(0),
           initialized(false),
           stat_submitted(0), stat_culled_back(0), stat_culled_offscreen(0) {
         // identity until the engine sets a real one, so an environment drawn
         // before the first setEnvironmentView is wrong rather than undefined
         for (int i = 0; i < 16; i++) env_inv_vp.m[i] = (i % 5 == 0) ? 1.f : 0.f;
+        for (int i = 0; i < 9; i++) ibl_e2w[i] = (i % 4 == 0) ? 1.f : 0.f;
 
         int w = width, h = height;
         tiles_x = (w + TILE_W - 1) / TILE_W;
@@ -832,7 +842,36 @@ public:
         if (!initialized) return false;
         clearEnvironment();
         has_env = uploadFloatTexture(rgba, w, h, &d_env_arr, &d_env_tex);
+        if (has_env) buildIrradiance(w, h);
         return has_env;
+    }
+
+    // One convolution per environment load. The result is small enough that
+    // the round trip through host memory costs less than it would take to
+    // write a device-to-array path for it.
+    void buildIrradiance(int env_w, int env_h) {
+        const int cw = cudaIrradianceConvWidth();
+        const int ch = cudaIrradianceConvHeight();
+        const int iw = IRRADIANCE_W, ih = IRRADIANCE_H;
+
+        float4 *d_conv = NULL, *d_irr = NULL;
+        if (cudaMalloc(&d_conv, (size_t)cw * ch * sizeof(float4)) != cudaSuccess)
+            return;
+        if (cudaMalloc(&d_irr, (size_t)iw * ih * sizeof(float4)) != cudaSuccess) {
+            cudaFree(d_conv);
+            return;
+        }
+
+        cudaLaunchEnvReduce(d_env_tex, d_conv, cw, ch, env_w, env_h);
+        cudaLaunchIrradiance(d_conv, cw, ch, d_irr, iw, ih);
+
+        std::vector<float> host((size_t)iw * ih * 4);
+        cudaMemcpy(host.data(), d_irr, host.size() * sizeof(float),
+                   cudaMemcpyDeviceToHost);
+        cudaFree(d_conv);
+        cudaFree(d_irr);
+
+        has_irr = uploadFloatTexture(host.data(), iw, ih, &d_irr_arr, &d_irr_tex);
     }
 
     void clearEnvironment() {
@@ -841,6 +880,20 @@ public:
         d_env_tex = 0;
         d_env_arr = NULL;
         has_env = false;
+
+        if (d_irr_tex) cudaDestroyTextureObject(d_irr_tex);
+        if (d_irr_arr) cudaFreeArray(d_irr_arr);
+        d_irr_tex = 0;
+        d_irr_arr = NULL;
+        has_irr = false;
+    }
+
+    // eye -> world rotation for this frame, and how much of the environment's
+    // light to admit. Both are frame state, sent alongside the view.
+    void setIBL(const float* e2w9, float intensity) {
+        if (e2w9)
+            for (int i = 0; i < 9; i++) ibl_e2w[i] = e2w9[i];
+        ibl_intensity = intensity > 0.f ? intensity : 0.f;
     }
 
     void setEnvironmentView(const float* inv16) {
@@ -913,6 +966,13 @@ public:
         for (int r2 = 0; r2 < 3; r2++)
             for (int c2 = 0; c2 < 3; c2++)
                 m.mit[r2 * 3 + c2] = mit16[r2 * 4 + c2];
+
+        if (has_irr) {
+            m.irradiance = d_irr_tex;
+            m.has_irradiance = 1;
+            m.ibl_intensity = ibl_intensity;
+            for (int i = 0; i < 9; i++) m.e2w[i] = ibl_e2w[i];
+        }
         // staged, not uploaded: flush() sends the whole table in one memcpy
         h_materials.push_back(m);
         int mat_id = (int)h_materials.size() - 1;
@@ -1050,6 +1110,9 @@ extern "C" {
     }
     void cudaSetEnvironmentView(const float* inv16) {
         if (g_cuda_rasterizer) g_cuda_rasterizer->setEnvironmentView(inv16);
+    }
+    void cudaSetIBL(const float* e2w9, float intensity) {
+        if (g_cuda_rasterizer) g_cuda_rasterizer->setIBL(e2w9, intensity);
     }
     void cudaSetExposure(float exposure) {
         if (g_cuda_rasterizer) g_cuda_rasterizer->setExposure(exposure);

@@ -187,13 +187,49 @@ ShadedFragment shade_fragment(const CudaTriangle& tri, const CudaMaterial& mat,
         br = d.z * 255.0f; bg = d.y * 255.0f; bb = d.x * 255.0f;
     }
 
-    // tests/test_shaded.cpp checks these constants against an
-    // independently derived CPU reference
-    float amb = 20.0f;
+    // Ambient. Without an environment this is the flat grey it has always
+    // been, which tests/test_shaded.cpp checks against an independently
+    // derived CPU reference.
+    //
+    // With one, it becomes albedo times the irradiance arriving along the
+    // normal, which is what makes an object take colour from its
+    // surroundings. The mapped normal is used, not the geometric one: unlike
+    // the SSAO hemisphere, a lookup has nothing to be tilted into.
+    float amb_r = 20.0f, amb_g = 20.0f, amb_b = 20.0f;
+    if (mat.has_irradiance) {
+        const float* M = mat.e2w;
+        float wx = M[0]*nxi + M[1]*nyi + M[2]*nzi;
+        float wy = M[3]*nxi + M[4]*nyi + M[5]*nzi;
+        float wz = M[6]*nxi + M[7]*nyi + M[8]*nzi;
+        float wl = sqrtf(wx*wx + wy*wy + wz*wz);
+        if (wl > 1e-12f) { wx /= wl; wy /= wl; wz /= wl; }
+
+        float iu, iv;
+        equirect_uv(wx, wy, wz, &iu, &iv);
+        float4 E = tex2D<float4>(mat.irradiance, iu, iv);
+        // the map holds E/pi, so albedo is the only other factor
+        amb_r = br * E.x * mat.ibl_intensity;
+        amb_g = bg * E.y * mat.ibl_intensity;
+        amb_b = bb * E.z * mat.ibl_intensity;
+    }
+
     float lit = shadow * mat.lintensity * (0.8f * diff + 0.3f * spec);
-    out.r = fminf(amb + br * lit * mat.lcr, 255.0f);
-    out.g = fminf(amb + bg * lit * mat.lcg, 255.0f);
-    out.b = fminf(amb + bb * lit * mat.lcb, 255.0f);
+    out.r = amb_r + br * lit * mat.lcr;
+    out.g = amb_g + bg * lit * mat.lcg;
+    out.b = amb_b + bb * lit * mat.lcb;
+
+    // Clipped at white only without an environment. There, 255 is "fully lit"
+    // by definition and nothing above it means anything, so the ceiling costs
+    // nothing. An environment gives the frame a real scale -- irradiance of 2
+    // is twice irradiance of 1 -- and clipping there throws that away: a sky
+    // bright enough to push albedo past white flattens every surface to the
+    // same 255 and the object loses its form entirely. Past this point the
+    // range is the tone map's to deal with.
+    if (!mat.has_irradiance) {
+        out.r = fminf(out.r, 255.0f);
+        out.g = fminf(out.g, 255.0f);
+        out.b = fminf(out.b, 255.0f);
+    }
 
     out.gnx = gnx; out.gny = gny; out.gnz = gnz;
     out.has_normal = true;

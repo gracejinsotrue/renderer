@@ -15,7 +15,7 @@ Engine::Engine(int winWidth, int winHeight, int renWidth, int renHeight)
       cachedGeometryVersion(0),
       running(false), showStats(true), ssaaFactor(2),
       ssaoEnabled(true), ssaoRadius(0.18f), ssaoIntensity(0.85f), ssaoDebug(0),
-      shadowBias(2.0f), exposure(1.0f),
+      shadowBias(2.0f), exposure(1.0f), iblIntensity(1.0f),
       windowWidth(winWidth), windowHeight(winHeight), renderWidth(renWidth), renderHeight(renHeight),
       mouseX(0), mouseY(0), mouseDeltaX(0), mouseDeltaY(0), lastMouseX(0), lastMouseY(0), mousePressed(false),
       cameraRotationX(0.0f), cameraRotationY(0.0f), orbitMode(true)
@@ -335,6 +335,11 @@ void Engine::loadBackground(const std::string &filename)
 void Engine::loadEnvironment(const std::string &filename)
 {
     scene.loadEnvironment(filename);
+}
+
+void Engine::setIBLIntensity(float v)
+{
+    iblIntensity = v < 0.f ? 0.f : (v > 8.f ? 8.f : v);
 }
 
 void Engine::setExposure(float v)
@@ -924,6 +929,15 @@ void Engine::renderScene()
                 inv16[r * 4 + c] = invCam[r][c];
         cudaSetEnvironmentView(inv16);
         cudaSetExposure(exposure);
+
+        // The irradiance map is built in world space, but normals reach the
+        // shader in eye space. lookat's rotation is orthonormal, so the way
+        // back is its transpose.
+        float e2w[9];
+        for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 3; c++)
+                e2w[r * 3 + c] = originalModelView[c][r];
+        cudaSetIBL(e2w, iblIntensity);
     }
 
     // before the early return: present() blits whatever is in device memory,

@@ -78,6 +78,17 @@ void cudaLaunchBackground(float4* framebuffer, cudaTextureObject_t bg,
 void cudaLaunchEnvironment(float4* framebuffer, cudaTextureObject_t env,
                            Mat4 inv_vp, int width, int height);
 
+// ibl.cu: the environment, reduced and then convolved with a cosine lobe into
+// the irradiance a surface receives from each direction. Run once per
+// environment, not per frame. The conv size is fixed and reported here so the
+// caller can size the intermediate buffer.
+int cudaIrradianceConvWidth();
+int cudaIrradianceConvHeight();
+void cudaLaunchEnvReduce(cudaTextureObject_t env, float4* dst,
+                         int dst_w, int dst_h, int src_w, int src_h);
+void cudaLaunchIrradiance(const float4* src, int src_w, int src_h,
+                          float4* dst, int dst_w, int dst_h);
+
 // resolve.cu: linear radiance -> the 8-bit frame. passthrough skips exposure
 // and the curve for the SSAO debug views, which carry normals and occlusion
 // rather than light and would be misreported by a tone curve.
