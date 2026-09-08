@@ -72,9 +72,14 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Configure
-        env:
-          VCPKG_ROOT: ${{ env.VCPKG_INSTALLATION_ROOT }}
-        run: cmake --preset windows -DCMAKE_CUDA_ARCHITECTURES=86
+        # VCPKG_ROOT has to be set here rather than in an env: block. The env
+        # context holds only what the workflow itself sets, so
+        # ${{ env.VCPKG_INSTALLATION_ROOT }} expands to nothing and the
+        # preset's toolchain path becomes an absolute /scripts/... that CMake
+        # cannot find. The runner's own variables are only visible to the shell.
+        run: |
+          $env:VCPKG_ROOT = $env:VCPKG_INSTALLATION_ROOT
+          cmake --preset windows -DCMAKE_CUDA_ARCHITECTURES=86
 
       - name: Build
         run: cmake --build build/windows

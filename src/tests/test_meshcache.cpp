@@ -45,7 +45,10 @@ int main(int argc, char **argv)
     setenv("SDL_RENDER_DRIVER", "software", 1);
 
     Engine engine(1024, 768, 800, 800);
-    if (!engine.init()) { printf("engine init failed\n"); return 1; }
+    // Engine::init brings up the CUDA rasterizer and returns false when there
+    // is no device, so a machine without a GPU stops here, not at the
+    // isCudaAvailable check below. That has to read as skipped.
+    if (!engine.init()) { printf("SKIP: engine init failed (no CUDA, or no SDL)\n"); return 77; }
     if (!engine.isCudaAvailable()) { printf("SKIP: no CUDA\n"); return 77; }
 
     printf("\n--- one model uploaded\n");
